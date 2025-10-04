@@ -5,10 +5,13 @@ import frappe
 
 from frappe import _dict, _
 from frappe.model.document import Document
+from frappe.utils.file_manager import save_file
 from frappe.utils.safe_exec import get_safe_globals, safe_exec
 from frappe.integrations.utils import make_post_request
 from frappe.desk.form.utils import get_pdf_link
 from frappe.utils import add_to_date, nowdate, datetime
+from frappe.utils.pdf import get_pdf
+import time
 
 
 class WhatsAppNotification(Document):
@@ -181,14 +184,11 @@ class WhatsAppNotification(Document):
                         fieldname="value"
                     )
                     print_format = default_print_format if default_print_format else print_format
-                link = get_pdf_link(
-                    doc_data['doctype'],
-                    doc_data['name'],
-                    print_format=print_format
-                )
-
-                filename = f'{doc_data["name"]}.pdf'
-                url = f'{frappe.utils.get_url()}{link}&key={key}'
+                
+                filename = frappe.scrub(doc_data["name"])
+                print("FILENAME", filename)
+                # Download PDF and save as public file
+                url = self.create_public_pdf(doc_data, print_format, filename)
 
             elif self.custom_attachment:
                 filename = self.file_name
@@ -214,7 +214,7 @@ class WhatsAppNotification(Document):
                         "type": "document",
                         "document": {
                             "link": url,
-                            "filename": filename
+                            "filename": f'{filename}.pdf'
                         }
                     }]
                 })
@@ -245,6 +245,7 @@ class WhatsAppNotification(Document):
         }
         try:
             success = False
+            print(data["template"]["components"])
             response = make_post_request(
                 f"{settings.url}/{settings.version}/{settings.phone_id}/messages",
                 headers=headers, data=json.dumps(data)
@@ -362,6 +363,54 @@ class WhatsAppNotification(Document):
             self.send_template_message(doc)
             # print(doc.name)
 
+    def create_public_pdf(self, doc_data, print_format, filename):
+        """using frappe's PDF generation directly
+        Args:
+            doc_data (dict): Document data
+            print_format (str): Print format to use
+            filename (str): Name for the PDF file
+            
+        Returns:
+            str: Public URL of the saved PDF file
+        """
+        try:            
+            # Generate PDF content directly
+            html = frappe.get_print(
+                doc_data['doctype'], 
+                doc_data['name'], 
+                print_format=print_format,
+                as_pdf=False
+            )
+            
+            pdf_content = get_pdf(html)
+            
+            # Create unique filename
+            timestamp = str(int(time.time()))
+            unique_filename = f"{filename}_{timestamp}.pdf"
+            
+            # Save as public file
+            file_doc = save_file(
+                fname=unique_filename,
+                content=pdf_content,
+                dt=doc_data.get('doctype'),
+                dn=doc_data.get('name'),
+                is_private=0,  # Make it public
+                decode=False
+            )
+            
+            # Return the public URL
+            # public_url = f"{frappe.utils.get_url()}{file_doc.file_url}"
+            public_url = f"https://ptstdm.ngrok.dev{file_doc.file_url}"
+            
+            frappe.logger().info(f"PDF generated and saved as public file: {public_url}")
+            return public_url
+            
+        except Exception as e:
+            frappe.log_error(
+                title="Failed to generate public PDF",
+                message=f"Error generating PDF for {doc_data.get('doctype')} {doc_data.get('name')}: {str(e)}\n{frappe.get_traceback()}"
+            )
+            raise e
 
 @frappe.whitelist()
 def call_trigger_notifications():
