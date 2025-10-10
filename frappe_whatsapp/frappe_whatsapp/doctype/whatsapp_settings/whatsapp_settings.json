@@ -43,9 +43,11 @@
    "label": "Business ID"
   },
   {
+   "default": "secret",
    "fieldname": "webhook_verify_token",
    "fieldtype": "Data",
-   "label": "Webhook Verify Token"
+   "label": "Webhook Verify Token",
+   "read_only": 1
   },
   {
    "default": "0",
@@ -62,7 +64,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2024-05-03 12:42:25.851544",
+ "modified": "2025-10-10 09:42:48.897143",
  "modified_by": "Administrator",
  "module": "Frappe Whatsapp",
  "name": "WhatsApp Settings",
@@ -79,6 +81,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []
