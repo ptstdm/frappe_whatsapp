@@ -186,7 +186,7 @@ class WhatsAppNotification(Document):
                     print_format = default_print_format if default_print_format else print_format
                 
                 filename = frappe.scrub(doc_data["name"])
-                print("FILENAME", filename)
+
                 # Download PDF and save as public file
                 url = self.create_public_pdf(doc_data, print_format, filename)
 
@@ -245,7 +245,6 @@ class WhatsAppNotification(Document):
         }
         try:
             success = False
-            print(data["template"]["components"])
             response = make_post_request(
                 f"{settings.url}/{settings.version}/{settings.phone_id}/messages",
                 headers=headers, data=json.dumps(data)
@@ -361,7 +360,6 @@ class WhatsAppNotification(Document):
         for d in doc_list:
             doc = frappe.get_doc(self.reference_doctype, d.name)
             self.send_template_message(doc)
-            # print(doc.name)
 
     def create_public_pdf(self, doc_data, print_format, filename):
         """using frappe's PDF generation directly
@@ -376,7 +374,7 @@ class WhatsAppNotification(Document):
         try:            
             # Generate PDF content directly
             html = frappe.get_print(
-                doc_data['doctype'], 
+                doc_data['doctype'],
                 doc_data['name'], 
                 print_format=print_format,
                 as_pdf=False
@@ -399,8 +397,8 @@ class WhatsAppNotification(Document):
             )
             
             # Return the public URL
-            # public_url = f"{frappe.utils.get_url()}{file_doc.file_url}"
-            public_url = f"https://ptstdm.ngrok.dev{file_doc.file_url}"
+            public_url = f"{frappe.utils.get_url()}{file_doc.file_url}"
+            # public_url = f"https://ptstdm.ngrok.dev{file_doc.file_url}"
             
             frappe.logger().info(f"PDF generated and saved as public file: {public_url}")
             return public_url
