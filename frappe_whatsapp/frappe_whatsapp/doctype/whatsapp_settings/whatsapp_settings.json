@@ -8,48 +8,9 @@
  "field_order": [
   "enabled",
   "allow_auto_read_receipt",
-  "token",
-  "url",
-  "version",
-  "phone_id",
-  "business_id",
-  "app_id",
-  "webhook_verify_token"
+  "whatsapp_accounts"
  ],
  "fields": [
-  {
-   "fieldname": "token",
-   "fieldtype": "Password",
-   "label": "Token",
-   "length": 250
-  },
-  {
-   "fieldname": "url",
-   "fieldtype": "Data",
-   "label": "URL"
-  },
-  {
-   "fieldname": "version",
-   "fieldtype": "Data",
-   "label": "Version"
-  },
-  {
-   "fieldname": "phone_id",
-   "fieldtype": "Data",
-   "label": "Phone ID"
-  },
-  {
-   "fieldname": "business_id",
-   "fieldtype": "Data",
-   "label": "Business ID"
-  },
-  {
-    "default": "secret",
-   "fieldname": "webhook_verify_token",
-   "fieldtype": "Password",
-   "label": "Webhook Verify Token",
-   "read_only": 1
-  },
   {
    "default": "0",
    "fieldname": "enabled",
@@ -57,22 +18,24 @@
    "label": "Enabled"
   },
   {
-   "fieldname": "app_id",
-   "fieldtype": "Data",
-   "label": "App ID"
-  },
-  {
    "default": "1",
    "fieldname": "allow_auto_read_receipt",
    "fieldtype": "Check",
    "label": "Allow Auto Read Receipt"
+  },
+  {
+   "fieldname": "whatsapp_accounts",
+   "fieldtype": "Table",
+   "label": "WhatsApp Accounts",
+   "length": 250,
+   "options": "WhatsApp Account"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-10-11 12:51:10.291950",
+ "modified": "2025-10-15 14:25:03.672622",
  "modified_by": "Administrator",
  "module": "Frappe Whatsapp",
  "name": "WhatsApp Settings",

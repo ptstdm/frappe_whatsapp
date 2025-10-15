@@ -28,6 +28,8 @@
   "section_break_iyjf",
   "is_reply",
   "reply_to_message_id",
+  "column_break_beaa",
+  "whatsapp_account",
   "section_break_dhba",
   "reference_doctype",
   "bulk_message_reference",
@@ -203,11 +205,23 @@
    "fieldname": "body_param",
    "fieldtype": "JSON",
    "label": "Body Param"
+  },
+  {
+   "fieldname": "column_break_beaa",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "whatsapp_account",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "WhatsApp Account",
+   "options": "WhatsApp Account",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-29 10:56:15.570894",
+ "modified": "2025-10-15 13:44:23.885272",
  "modified_by": "Administrator",
  "module": "Frappe Whatsapp",
  "name": "WhatsApp Message",
