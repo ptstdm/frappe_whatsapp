@@ -119,16 +119,22 @@ class WhatsAppTemplates(Document):
 
     def get_absolute_path(self, file_name):
         """Get absolute path for a file, handling local paths."""
+        site_path = f'{frappe.utils.get_bench_path()}/sites/{frappe.utils.get_site_base_path()[2:]}'
         # Handle local file paths
         if file_name.startswith('/files/'):
-            file_path = f'{frappe.utils.get_bench_path()}/sites/{frappe.utils.get_site_base_path()[2:]}/public{file_name}'
+            file_path = f'{site_path}/public{file_name}'
         elif file_name.startswith('/private/'):
-            file_path = f'{frappe.utils.get_bench_path()}/sites/{frappe.utils.get_site_base_path()[2:]}{file_name}'
+            file_path = f'{site_path}{file_name}'
         else:
             # Fallback: assume it's a relative path or handle as-is
-            file_path = file_name
-        
-        return file_path
+            return file_name
+
+        # Reject paths that escape the site directory (e.g. /files/../../etc/passwd)
+        site_root = os.path.realpath(site_path)
+        resolved = os.path.realpath(file_path)
+        if resolved != site_root and not resolved.startswith(site_root + os.sep):
+            frappe.throw(frappe._("Invalid file path: {0}").format(file_name))
+        return resolved
 
 
     def after_insert(self):

@@ -88,21 +88,21 @@ def get_data(filters):
         conditions += " AND from_number = %(from_number)s"
     
     data = frappe.db.sql("""
-        SELECT 
-            name, 
-            title, 
-            creation, 
-            recipient_count, 
-            sent_count, 
-            status 
-        FROM 
-            `tabBulk WhatsApp Message` 
-        WHERE 
-            docstatus = 1 
+        SELECT
+            name,
+            title,
+            creation,
+            recipient_count,
+            sent_count,
+            status
+        FROM
+            `tabBulk WhatsApp Message`
+        WHERE
+            docstatus = 1
             {conditions}
-        ORDER BY 
+        ORDER BY
             creation DESC
-    """.format(conditions=conditions), filters, as_dict=1)
+    """.format(conditions=conditions), filters, as_dict=1)  # nosemgrep: frappe-sql-format-injection -- conditions is built from string literals only; filter values go through %(...)s parameters
     
     # Fetch additional stats for each bulk message
     for row in data:

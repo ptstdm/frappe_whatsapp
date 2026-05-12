@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-with open("requirements.txt") as f:
+with open("requirements.txt") as f:  # nosemgrep: frappe-security-file-traversal -- literal path read at package-build time, no user input
     install_requires = f.read().strip().split("\n")
 
 # get version from __version__ variable in frappe_whatsapp/__init__.py
