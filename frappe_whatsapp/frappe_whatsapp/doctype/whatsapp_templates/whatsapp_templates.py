@@ -13,7 +13,7 @@ from frappe.desk.form.utils import get_pdf_link
 
 from frappe_whatsapp.utils import get_whatsapp_account
 
-class WhatsAppTemplates(Document):
+class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-committing-other-method -- get_settings() sets self._token/_url/_version/_business_id/_app_id/_headers as in-memory scratch for the outbound Meta HTTP call; they are not DocType fields and must not be persisted
     """Create whatsapp template."""
 
     def validate(self):
@@ -137,7 +137,7 @@ class WhatsAppTemplates(Document):
         return resolved
 
 
-    def after_insert(self):
+    def after_insert(self):  # nosemgrep: frappe-modifying-but-not-committing -- self.actual_name/id/status are persisted via self.db_update() after the Meta round-trip; the static check can't trace through the API call
         # actual_name / id / status are persisted via self.db_update() below
         # after the Meta round-trip; the static check can't trace that call.
         if self.template_name:

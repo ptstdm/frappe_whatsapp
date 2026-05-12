@@ -160,7 +160,7 @@ def post():
 					}).insert(ignore_permissions=True)
 
 					# Publish realtime event for flow response
-					frappe.publish_realtime(
+					frappe.publish_realtime(  # nosemgrep: frappe-realtime-pick-room -- intentional site-wide fan-out for chat UIs (whatsapp_chat companion app) listening for inbound flow responses
 						"whatsapp_flow_response",
 						{
 							"phone": message['from'],

@@ -206,7 +206,7 @@ class TestWebhookEndpoint(IntegrationTestCase):
     def test_webhook_get_verification(self):
         """Test GET webhook verification."""
         mock_request = self._make_mock_request("GET")
-        frappe.form_dict = frappe._dict({
+        frappe.local.form_dict = frappe._dict({
             "hub.challenge": "test_challenge_123",
             "hub.verify_token": "Test WA Webhook EP Account",
             "hub.mode": "subscribe",
@@ -220,7 +220,7 @@ class TestWebhookEndpoint(IntegrationTestCase):
     def test_webhook_get_wrong_token(self):
         """Test GET webhook with wrong verify token."""
         mock_request = self._make_mock_request("GET")
-        frappe.form_dict = frappe._dict({
+        frappe.local.form_dict = frappe._dict({
             "hub.challenge": "test_challenge",
             "hub.verify_token": "wrong_token",
         })
