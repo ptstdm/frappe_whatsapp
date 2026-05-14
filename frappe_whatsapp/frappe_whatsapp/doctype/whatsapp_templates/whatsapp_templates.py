@@ -2,7 +2,6 @@
 
 # Copyright (c) 2022, Shridhar Patil and contributors
 # For license information, please see license.txt
-import os
 import json
 import frappe
 import magic
@@ -41,17 +40,17 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
     def get_session_id(self, file):
         """Upload media."""
         self.get_settings()
-        
+
         # Check if it's a remote file, load data accordingly
         if file.startswith(('http://', 'https://')):
             remote_file_data = self._prepare_remote_file(file)
             file_type = remote_file_data['file_type']
             file_length = remote_file_data['file_size']
         else:
-            file_path = self.get_absolute_path(file)
+            file_content = self._read_local_file(file)
             mime = magic.Magic(mime=True)
-            file_type = mime.from_file(file_path)
-            file_length = os.path.getsize(file_path)
+            file_type = mime.from_buffer(file_content)
+            file_length = len(file_content)
 
         payload = {
             'file_length': file_length,
@@ -104,9 +103,7 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
             remote_file_data = self._prepare_remote_file(file)
             file_content = remote_file_data['file_content']
         else:
-            file_path = self.get_absolute_path(file)
-            with open(file_path, mode='rb') as f: # b is important -> binary
-                file_content = f.read()
+            file_content = self._read_local_file(file)
 
         payload = file_content
         response = make_post_request(
@@ -117,24 +114,10 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
 
         self._media_id = response['h']
 
-    def get_absolute_path(self, file_name):
-        """Get absolute path for a file, handling local paths."""
-        site_path = f'{frappe.utils.get_bench_path()}/sites/{frappe.utils.get_site_base_path()[2:]}'
-        # Handle local file paths
-        if file_name.startswith('/files/'):
-            file_path = f'{site_path}/public{file_name}'
-        elif file_name.startswith('/private/'):
-            file_path = f'{site_path}{file_name}'
-        else:
-            # Fallback: assume it's a relative path or handle as-is
-            return file_name
-
-        # Reject paths that escape the site directory (e.g. /files/../../etc/passwd)
-        site_root = os.path.realpath(site_path)
-        resolved = os.path.realpath(file_path)
-        if resolved != site_root and not resolved.startswith(site_root + os.sep):
-            frappe.throw(frappe._("Invalid file path: {0}").format(file_name))
-        return resolved
+    def _read_local_file(self, file_url):
+        # Routed through File so path resolution stays inside Frappe's
+        # vetted file handling — never feed a raw URL to open().
+        return frappe.get_doc("File", {"file_url": file_url}).get_content()
 
 
     def after_insert(self):  # nosemgrep: frappe-modifying-but-not-committing -- self.actual_name/id/status are persisted via self.db_update() after the Meta round-trip; the static check can't trace through the API call

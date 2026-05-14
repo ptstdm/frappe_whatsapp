@@ -101,17 +101,17 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         doc.set_whatsapp_account()
         self.assertTrue(len(doc.whatsapp_account) > 0)
 
-    def test_get_absolute_path_public_files(self):
-        """Test get_absolute_path for public files."""
+    def test_read_local_file_uses_file_doctype(self):
+        """_read_local_file resolves through the File doctype, not raw paths."""
         doc = self._make_template_without_hooks(template_name="test_tmpl_path")
-        path = doc.get_absolute_path("/files/test_image.png")
-        self.assertIn("/public/files/test_image.png", path)
 
-    def test_get_absolute_path_private_files(self):
-        """Test get_absolute_path for private files."""
-        doc = self._make_template_without_hooks(template_name="test_tmpl_priv_path")
-        path = doc.get_absolute_path("/private/files/test_doc.pdf")
-        self.assertIn("/private/files/test_doc.pdf", path)
+        mock_file = MagicMock()
+        mock_file.get_content.return_value = b"binary-content"
+        with patch("frappe.get_doc", return_value=mock_file) as mock_get_doc:
+            content = doc._read_local_file("/files/test_image.png")
+
+        self.assertEqual(content, b"binary-content")
+        mock_get_doc.assert_called_once_with("File", {"file_url": "/files/test_image.png"})
 
     def test_get_header_text(self):
         """Test get_header for TEXT header type."""
