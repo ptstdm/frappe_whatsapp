@@ -10,7 +10,9 @@
   "type",
   "status",
   "to",
+  "to_normalized",
   "from",
+  "from_normalized",
   "profile_name",
   "use_template",
   "template",
@@ -203,11 +205,25 @@
    "fieldname": "body_param",
    "fieldtype": "JSON",
    "label": "Body Param"
+  },
+  {
+   "fieldname": "to_normalized",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "To Normalized",
+   "search_index": 1
+  },
+  {
+   "fieldname": "from_normalized",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "From Normalized",
+   "search_index": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-29 10:56:15.570894",
+ "modified": "2026-06-23 20:15:47.187524",
  "modified_by": "Administrator",
  "module": "Frappe Whatsapp",
  "name": "WhatsApp Message",
