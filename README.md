@@ -1,4 +1,4 @@
-Frappe Whatsapp
+ Frappe Whatsapp
 
 [Docs](https://shridarpatil.github.io/frappe_whatsapp/)
 
