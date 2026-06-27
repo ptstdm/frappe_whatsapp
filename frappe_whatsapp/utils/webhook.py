@@ -244,16 +244,19 @@ def apply_whatsapp_message_status(message_id, status, conversation=None):
 	view -- e.g. the outbound-send flow finalising the message, or a chat "mark as read". Running the write
 	under READ COMMITTED turns that conflict detection off (last-writer-wins, which is fine for a status
 	field), so the UPDATE just applies. A transaction's isolation is fixed when it starts and Frappe keeps a
-	transaction continuously open, so SET SESSION (which only affects the *next* transaction) is followed by
-	a commit to roll onto a fresh RC transaction; REPEATABLE READ is restored in `finally` because this job
-	may share a worker with others. Non-fatal + idempotent: a status for a message we do not store no-ops,
-	and re-delivered callbacks just re-apply.
+	transaction continuously open, so we capture the connection's current isolation, rollback to end that
+	transaction (without committing pending state), then SET SESSION READ COMMITTED for the next one. The
+	captured level is restored via a guarded helper that can never fail the job. Non-fatal + idempotent: a
+	status for a message we do not store no-ops, and re-delivered callbacks just re-apply.
 	"""
+	prior_isolation = None
 	try:
-		# Run the write under READ COMMITTED so snapshot isolation does not raise 1020 (see docstring). SET
-		# SESSION is allowed mid-transaction; the commit then rolls us onto a fresh transaction under RC.
+		# Capture the connection's current isolation so we restore exactly it (not a hard-coded RR), then end
+		# the open transaction with a rollback (don't commit pending state) and switch to RC, under which
+		# snapshot isolation can't raise 1020 on the write (see docstring).
+		prior_isolation = frappe.db.sql("SELECT @@transaction_isolation")[0][0]
+		frappe.db.rollback()
 		frappe.db.sql("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
-		frappe.db.commit()
 
 		name = frappe.db.get_value("WhatsApp Message", {"message_id": message_id})
 		if not name:
@@ -271,7 +274,30 @@ def apply_whatsapp_message_status(message_id, status, conversation=None):
 			message=f"message_id={message_id}, status={status}\n{frappe.get_traceback()}",
 		)
 	finally:
-		# This job may run on the shared `short` worker until a dedicated `whatsapp` worker exists; restore
-		# the connection's default isolation so other jobs on it are not left on READ COMMITTED.
-		frappe.db.sql("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-		frappe.db.commit()
+		_restore_session_isolation(prior_isolation)
+
+
+# @@transaction_isolation reports a hyphenated value (e.g. "REPEATABLE-READ"); SET SESSION needs the spaced
+# form. Whitelisted so the restore never interpolates an unexpected value into SQL.
+_ISOLATION_SQL = {
+	"REPEATABLE-READ": "REPEATABLE READ",
+	"READ-COMMITTED": "READ COMMITTED",
+	"READ-UNCOMMITTED": "READ UNCOMMITTED",
+	"SERIALIZABLE": "SERIALIZABLE",
+}
+
+
+def _restore_session_isolation(prior_isolation):
+	"""Restore the session isolation captured before the RC switch. Guarded so a failure here can never fail
+	the WhatsApp status job (nor mask the original error when raised from a `finally`)."""
+	level = _ISOLATION_SQL.get(prior_isolation)
+	if not level:
+		return
+	try:
+		frappe.db.rollback()
+		frappe.db.sql("SET SESSION TRANSACTION ISOLATION LEVEL " + level)
+	except Exception:
+		frappe.log_error(
+			title="apply_whatsapp_message_status: isolation restore failed",
+			message=f"prior={prior_isolation}\n{frappe.get_traceback()}",
+		)
