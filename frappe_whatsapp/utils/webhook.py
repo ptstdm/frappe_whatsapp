@@ -5,6 +5,7 @@ import requests
 from frappe.utils.password import get_decrypted_password
 from werkzeug.wrappers import Response
 import frappe.utils
+from frappe.utils.background_jobs import get_queues_timeout
 
 
 @frappe.whitelist(allow_guest=True)
@@ -205,14 +206,58 @@ def update_template_status(data):
 	)
 
 def update_message_status(data):
-	"""Update message status."""
-	id = data['statuses'][0]['id']
-	status = data['statuses'][0]['status']
-	conversation = data['statuses'][0].get('conversation', {}).get('id')
-	name = frappe.db.get_value("WhatsApp Message", filters={"message_id": id})
+	"""Enqueue the WhatsApp delivery-status update off the request path.
 
-	doc = frappe.get_doc("WhatsApp Message", name)
-	doc.status = status
-	if conversation:
-		doc.conversation_id = conversation
-	doc.save(ignore_permissions=True)
+	Meta delivers sent/delivered/read (+ retries) as separate webhooks for the same message; writing it
+	inline via doc.save() raced the optimistic-lock SELECT ... FOR UPDATE under concurrent callbacks and
+	produced MariaDB 1020 ("Record has changed since last read"). We enqueue a direct-UPDATE job (after the
+	request commits) so the webhook returns 200 to Meta immediately and the write can't raise 1020.
+	"""
+	statuses = data.get("statuses")
+	if not statuses:
+		return
+	status_info = statuses[0]
+	frappe.enqueue(
+		"frappe_whatsapp.utils.webhook.apply_whatsapp_message_status",
+		queue=_whatsapp_status_queue(),
+		enqueue_after_commit=True,
+		message_id=status_info["id"],
+		status=status_info["status"],
+		conversation=status_info.get("conversation", {}).get("id"),
+	)
+
+
+def _whatsapp_status_queue():
+	"""Prefer a dedicated 'whatsapp' queue, falling back to 'short' until that queue is provisioned in
+	common_site_config['workers']. frappe.enqueue validates the queue name and raises for an unconfigured
+	one, so we choose a valid queue ourselves. get_queues_timeout() only reads the in-memory site conf, so
+	it is cheap to call per webhook.
+	"""
+	return "whatsapp" if "whatsapp" in get_queues_timeout() else "short"
+
+
+def apply_whatsapp_message_status(message_id, status, conversation=None):
+	"""Background job: apply a WhatsApp delivery-status update with a single direct UPDATE.
+
+	frappe.db.set_value issues a plain UPDATE (no optimistic-lock FOR UPDATE read), so concurrent status
+	updates for the same message serialize on a brief row lock instead of racing into a MariaDB 1020. It
+	keeps `modified`/`modified_by` fresh and clears the doc cache. Non-fatal and idempotent: a status for a
+	message we do not store no-ops, and re-delivered callbacks just re-apply (last-writer-wins; a single
+	FIFO 'whatsapp' worker preserves Meta's send order).
+	"""
+	try:
+		name = frappe.db.get_value("WhatsApp Message", {"message_id": message_id})
+		if not name:
+			# Status for a message not stored here (e.g. sent from another system) — nothing to update.
+			return
+		values = {"status": status}
+		if conversation:
+			values["conversation_id"] = conversation
+		frappe.db.set_value("WhatsApp Message", name, values)
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+		frappe.log_error(
+			title="apply_whatsapp_message_status failed",
+			message=f"message_id={message_id}, status={status}\n{frappe.get_traceback()}",
+		)
