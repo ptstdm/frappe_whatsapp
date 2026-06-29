@@ -10,6 +10,8 @@ from frappe.model.document import Document
 from frappe.utils import add_to_date, datetime, nowdate
 from frappe.utils.safe_exec import get_safe_globals, safe_exec
 
+from frappe_whatsapp.utils import get_whatsapp_account
+
 
 class WhatsAppNotification(Document):
     """Notification."""
@@ -48,7 +50,9 @@ class WhatsAppNotification(Document):
 
     def send_scheduled_message(self) -> dict:
         """Specific to API endpoint Server Scripts."""
-        safe_exec(self.condition, get_safe_globals(), dict(doc=self))
+        safe_exec(  # nosemgrep: frappe-codeinjection-eval -- safe_exec is Frappe's sandboxed eval; condition is admin-write-gated
+            self.condition, get_safe_globals(), dict(doc=self)
+        )
 
         template = frappe.db.get_value(
             "WhatsApp Templates", self.template, fieldname="*"
@@ -104,9 +108,7 @@ class WhatsAppNotification(Document):
             ):
                 return
 
-        template = default_template or frappe.db.get_value(
-            "WhatsApp Templates", self.template, fieldname="*"
-        )
+        template = default_template or frappe.get_doc("WhatsApp Templates", self.template)
 
         if template:
             if self.field_name:
@@ -169,9 +171,7 @@ class WhatsAppNotification(Document):
                 )
 
             if self.attach_document_print:
-                # frappe.db.begin()
                 key = doc.get_document_share_key()  # noqa
-                frappe.db.commit()
                 print_format = "Standard"
                 doctype = frappe.get_doc("DocType", doc_data["doctype"])
                 if doctype.custom:
@@ -213,36 +213,78 @@ class WhatsAppNotification(Document):
                 else:
                     url = f"{frappe.utils.get_url()}{file_url}"
 
-            if template.header_type == "DOCUMENT":
-                data["template"]["components"].append(
-                    {
-                        "type": "header",
-                        "parameters": [
-                            {
-                                "type": "document",
-                                "document": {"link": url, "filename": filename},
-                            }
-                        ],
-                    }
-                )
-            elif template.header_type == "IMAGE":
-                data["template"]["components"].append(
-                    {
-                        "type": "header",
-                        "parameters": [{"type": "image", "image": {"link": url}}],
-                    }
-                )
-            self.content_type = template.header_type.lower()
+            if template.header_type == 'DOCUMENT':
+                data['template']['components'].append({
+                    "type": "header",
+                    "parameters": [{
+                        "type": "document",
+                        "document": {
+                            "link": url,
+                            "filename": filename
+                        }
+                    }]
+                })
+            elif template.header_type == 'IMAGE':
+                data['template']['components'].append({
+                    "type": "header",
+                    "parameters": [{
+                        "type": "image",
+                        "image": {
+                            "link": url
+                        }
+                    }]
+                })
+            self.content_type = template.header_type.lower() if template.header_type else None
+
+            if template.buttons:
+                button_fields = self.button_fields.split(",") if self.button_fields else []
+                for idx, btn in enumerate(template.buttons):
+                    if btn.button_type == "Visit Website" and btn.url_type == "Dynamic":
+                        if button_fields:
+                            data['template']['components'].append({
+                                "type": "button",
+                                "sub_type": "url",
+                                "index": str(idx),
+                                "parameters": [
+                                    {"type": "text", "text": doc.get(button_fields.pop(0))}
+                                ]
+                            })
+                    elif btn.button_type == "Multi-Product Message":
+                        # MPM requires a catalog_id and product_retailer_ids
+                        if button_fields:
+                            data['template']['components'].append({
+                                "type": "button",
+                                "sub_type": "mpm",
+                                "index": str(idx),
+                                "parameters": [
+                                    {"type": "action", "action": doc.get(button_fields.pop(0))}
+                                ]
+                            })
+                    elif btn.button_type == "Catalog":
+                        if button_fields:
+                            data['template']['components'].append({
+                                "type": "button",
+                                "sub_type": "catalog",
+                                "index": str(idx),
+                                "parameters": [
+                                    {"type": "action", "action": doc.get(button_fields.pop(0))}
+                                ]
+                            })
 
             self.notify(data, doc_data)
 
     def notify(self, data, doc_data=None):
         """Notify."""
-        settings = frappe.get_doc(
-            "WhatsApp Settings",
-            "WhatsApp Settings",
-        )
-        token = settings.get_password("token")
+        # Use notification WhatsApp account if available, otherwise use a default outgoing account
+        if self.whatsapp_account:
+            whatsapp_account = frappe.get_doc("WhatsApp Account", self.whatsapp_account)
+        else:
+            whatsapp_account = get_whatsapp_account(account_type='outgoing')
+
+        if not whatsapp_account:
+            frappe.throw(_("Please set a default outgoing WhatsApp Account"))
+
+        token = whatsapp_account.get_password("token")
 
         headers = {
             "authorization": f"Bearer {token}",
@@ -251,9 +293,8 @@ class WhatsAppNotification(Document):
         try:
             success = False
             response = make_post_request(
-                f"{settings.url}/{settings.version}/{settings.phone_id}/messages",
-                headers=headers,
-                data=json.dumps(data),
+                f"{whatsapp_account.url}/{whatsapp_account.version}/{whatsapp_account.phone_id}/messages",
+                headers=headers, data=json.dumps(data)
             )
 
             if not self.get("content_type"):
@@ -293,6 +334,7 @@ class WhatsAppNotification(Document):
                 "template": self.template,
                 "template_parameters": parameters,
                 "template_button_parameters": button_parameters,
+                "whatsapp_account": whatsapp_account.name,
             }
 
             if doc_data:
@@ -328,8 +370,9 @@ class WhatsAppNotification(Document):
         except Exception as e:
             error_message = str(e)
             if frappe.flags.integration_request:
-                response = frappe.flags.integration_request.json()["error"]
-                error_message = response.get("Error", response.get("message"))
+                response = frappe.flags.integration_request.json().get('error', {})
+                if response:
+                    error_message = response.get('Error', response.get("message"))
 
             frappe.msgprint(
                 f"Failed to trigger whatsapp message: {error_message}",
@@ -369,8 +412,10 @@ class WhatsAppNotification(Document):
 
     def format_number(self, number):
         """Format number."""
-        if number.startswith("+"):
-            number = number[1 : len(number)]
+        if not number:
+            return number
+        if (number.startswith("+")):
+            number = number[1:len(number)]
 
         return number
 

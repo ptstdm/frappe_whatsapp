@@ -25,10 +25,51 @@ def run_server_script_for_doc_event(doc, event):
     if notification:
         # run all scripts for this doctype + event
         for notification_name in notification:
-            frappe.get_doc(
-                "WhatsApp Notification",
-                notification_name
-            ).send_template_message(doc)
+            _schedule_whatsapp_notification(notification_name, doc)
+
+
+def _schedule_whatsapp_notification(notification_name, doc):
+    """Schedule WhatsApp notification to run after commit.
+
+    Frappe v16 disallows frappe.db.commit() in doc hooks, so we defer
+    the API call to after the transaction commits. This ensures share
+    keys (for document print attachments) are persisted before the
+    WhatsApp message containing their URL is sent to Meta.
+
+    On Frappe v14/v15, after_commit is not available, so we call directly.
+    """
+    if hasattr(frappe.db, "after_commit"):
+        # Frappe v16+: run after the doc-event transaction commits so that
+        # share keys / set-property-after-alert writes are visible to Meta,
+        # and commit our own writes (WhatsApp Message + Notification Log)
+        # since we are outside the request's auto-commit scope.
+        frappe.db.after_commit.add(
+            lambda: _send_whatsapp_notification(
+                notification_name, doc.doctype, doc.name, commit=True
+            )
+        )
+    else:
+        # Frappe v14/v15
+        _send_whatsapp_notification(notification_name, doc.doctype, doc.name)
+
+
+def _send_whatsapp_notification(notification_name, doctype, docname, commit=False):
+    """Send WhatsApp notification."""
+    try:
+        doc = frappe.get_doc(doctype, docname)
+        frappe.get_doc(
+            "WhatsApp Notification",
+            notification_name
+        ).send_template_message(doc)
+        if commit:
+            # nosemgrep: frappe-manual-commit -- runs in after_commit callback outside request scope; WhatsApp Message + Notification Log rows rely on this to persist
+            frappe.db.commit()
+    except Exception:
+        if commit:
+            frappe.db.rollback()
+        frappe.log_error(
+            title=f"WhatsApp Notification failed: {notification_name}"
+        )
 
 
 def get_notifications_map():
@@ -120,3 +161,24 @@ def trigger_whatsapp_notifications(event):
             "WhatsApp Notification",
             wa.name,
         ).send_scheduled_message()
+
+def get_whatsapp_account(phone_id=None, account_type='incoming'):
+    """map whatsapp account with message"""
+    if phone_id:
+        account_name = frappe.db.get_value('WhatsApp Account', {'phone_id': phone_id}, 'name')
+        if account_name:
+            return frappe.get_doc("WhatsApp Account", account_name)
+
+    account_field_type = 'is_default_incoming' if account_type =='incoming' else 'is_default_outgoing' 
+    default_account_name = frappe.db.get_value('WhatsApp Account', {account_field_type: 1}, 'name')
+    if default_account_name:
+        return frappe.get_doc("WhatsApp Account", default_account_name)
+
+    return None
+
+def format_number(number):
+    """Format number."""
+    if number.startswith("+"):
+        number = number[1 : len(number)]
+
+    return number
