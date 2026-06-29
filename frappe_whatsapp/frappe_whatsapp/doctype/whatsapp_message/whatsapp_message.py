@@ -351,6 +351,13 @@ class WhatsAppMessage(Document):
                         "parameters": [{"type": "payload", "payload": btn.button_label}]
                     })
                 elif btn.button_type == "Visit Website" and btn.url_type == "Dynamic":
+                    # ptstdm dynamic-URL model takes precedence: when
+                    # need_dynamic_button_url_parameter is set, the URL button
+                    # param is built above from field_name_for_button_parameter.
+                    # Skip here to avoid an empty param (Meta 400) and a
+                    # duplicate index-0 button component.
+                    if template.need_dynamic_button_url_parameter:
+                        continue
                     ref_doc = frappe.get_doc(self.reference_doctype, self.reference_name)
                     url = ref_doc.get_formatted(btn.website_url)
                     button_parameters.append({
