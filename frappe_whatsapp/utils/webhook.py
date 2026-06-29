@@ -253,18 +253,24 @@ def apply_whatsapp_message_status(message_id, status, conversation=None):
 	"mark as read" writes the same row, so concurrent status writes race. Under MariaDB snapshot isolation
 	(innodb_snapshot_isolation=ON) a plain UPDATE then raises ER_CHECKREAD (1020) when another connection
 	committed a change to this row since this transaction's read view. The status write is last-writer-wins +
-	idempotent (a missed callback re-applies on the next one), so we just retry: each attempt rolls back first
-	(`frappe.db.rollback()` re-begins the transaction, giving a fresh snapshot) and re-applies, with jittered
-	backoff. Non-fatal — a status for a message we don't store no-ops, and exhausted retries are logged only.
+	idempotent (a missed callback re-applies on the next one), so we just retry: we roll back once up front (a
+	reused worker connection can carry an open transaction with a stale read view) and again after each transient
+	conflict — every `frappe.db.rollback()` re-begins the transaction with a fresh snapshot — then re-apply, with
+	jittered backoff. Non-fatal — a status for a message we don't store no-ops, and exhausted retries are logged only.
 
 	(We previously tried to run this under READ COMMITTED, but `frappe.db.rollback()` re-begins the transaction
 	with no isolation clause, so the UPDATE still ran at REPEATABLE READ — the retry is isolation-agnostic.)
 	"""
+	# A reused RQ worker connection can carry an open transaction (stale read view) from a prior job; end it so
+	# attempt 1 also starts from a fresh snapshot, not just the post-conflict retries.
+	frappe.db.rollback()
 	for attempt in range(_STATUS_RETRY_ATTEMPTS):
 		try:
 			name = frappe.db.get_value("WhatsApp Message", {"message_id": message_id})
 			if not name:
 				# Status for a message not stored here (e.g. sent from another system) — nothing to update.
+				# Roll back so this job's read view isn't left open on the shared worker connection.
+				frappe.db.rollback()
 				return
 			values = {"status": status}
 			if conversation:

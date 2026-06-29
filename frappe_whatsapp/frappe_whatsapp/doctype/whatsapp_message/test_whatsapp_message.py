@@ -46,7 +46,7 @@ class TestApplyWhatsappMessageStatus(FrappeTestCase):
         _m_get, m_set, m_commit, m_rb, m_log = self._run(set_value_side_effect=se)
         self.assertEqual(m_set.call_count, 3, "set_value retried until it succeeds")
         self.assertEqual(m_commit.call_count, 1, "commit once, after the successful UPDATE")
-        self.assertEqual(m_rb.call_count, 2, "rollback before each of the 2 retries (fresh snapshot)")
+        self.assertEqual(m_rb.call_count, 3, "one up-front rollback + before each of the 2 retries (fresh snapshot)")
         m_log.assert_not_called()
 
     def test_exhaustion_logs_once_and_does_not_raise(self):
@@ -56,8 +56,12 @@ class TestApplyWhatsappMessageStatus(FrappeTestCase):
             raise frappe.QueryTimeoutError("1205 lock wait timeout")
 
         _m_get, m_set, m_commit, m_rb, m_log = self._run(set_value_side_effect=se)  # must not raise
-        self.assertEqual(m_set.call_count, 5, "exactly _STATUS_RETRY_ATTEMPTS attempts")
-        self.assertEqual(m_rb.call_count, 5)
+        self.assertEqual(m_set.call_count, webhook._STATUS_RETRY_ATTEMPTS, "one set_value per attempt")
+        self.assertEqual(
+            m_rb.call_count,
+            webhook._STATUS_RETRY_ATTEMPTS + 1,
+            "one up-front rollback + one per attempt",
+        )
         m_commit.assert_not_called()
         self.assertEqual(m_log.call_count, 1, "logs once, on exhaustion")
 
@@ -67,12 +71,14 @@ class TestApplyWhatsappMessageStatus(FrappeTestCase):
             patch.object(webhook.frappe.db, "get_value", return_value=None),
             patch.object(webhook.frappe.db, "set_value") as m_set,
             patch.object(webhook.frappe.db, "commit") as m_commit,
+            patch.object(webhook.frappe.db, "rollback") as m_rb,
             patch.object(webhook.frappe, "log_error") as m_log,
         ):
             webhook.apply_whatsapp_message_status("wamid.unknown", "read")
         m_set.assert_not_called()
         m_commit.assert_not_called()
         m_log.assert_not_called()
+        self.assertEqual(m_rb.call_count, 2, "up-front rollback + no-op-path rollback")
 
     def test_conversation_id_included_when_present(self):
         _m_get, m_set, _m_commit, _m_rb, _m_log = self._run(conversation="CONV-9")
