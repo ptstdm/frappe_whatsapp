@@ -93,6 +93,8 @@ class BulkWhatsAppMessage(Document):
         # wa_message.message = message_content
         wa_message.flags.custom_ref_doc = json.loads(recipient.get("recipient_data", "{}"))
         wa_message.bulk_message_reference = self.name
+        if self.whatsapp_account:
+            wa_message.whatsapp_account = self.whatsapp_account
         
         # If template is being used
         if self.use_template:
@@ -100,6 +102,12 @@ class BulkWhatsAppMessage(Document):
             wa_message.message_type = 'Template'
             wa_message.use_template = self.use_template
             # Handle template variables if needed
+
+            # handle MPM action JSON if product IDs and catalog ID are provided
+            mpm_action = self.get_mpm_action_json()
+            if mpm_action:
+                # We store the action JSON so the outgoing API call can find it
+                wa_message.product_catalog_json = json.dumps(mpm_action)
 
             if recipient.get("recipient_data") and self.variable_type=='Unique':
                 wa_message.body_param = recipient.get("recipient_data")
@@ -120,7 +128,13 @@ class BulkWhatsAppMessage(Document):
             self.db_set("status", "Completed")
 
     def retry_failed(self):
-        """Retry failed messages"""
+        """Retry failed messages by re-sending to Meta.
+
+        The original send lives in WhatsAppMessage.before_insert, which only
+        fires on first creation. For an existing Failed row we call
+        send_outgoing() explicitly — queued on the "long" worker the same
+        way queue_messages does, so large batches don't block the request.
+        """
         failed_messages = frappe.get_all(
             "WhatsApp Message",
             filters={
@@ -129,15 +143,35 @@ class BulkWhatsAppMessage(Document):
             },
             fields=["name"]
         )
-        
-        count = 0
+
         for msg in failed_messages:
-            message_doc = frappe.get_doc("WhatsApp Message", msg.name)
-            message_doc.status = "Queued"
-            message_doc.save(ignore_permissions=True)
-            count += 1
-        
-        frappe.msgprint(_("{0} messages have been requeued for sending").format(count))
+            frappe.enqueue_doc(
+                self.doctype, self.name,
+                "resend_single_message",
+                "long", 4000,
+                message_name=msg.name,
+            )
+
+        frappe.msgprint(_("{0} message(s) requeued for sending").format(len(failed_messages)))
+
+    def resend_single_message(self, message_name):
+        """Worker entry: re-send a single failed WhatsApp Message."""
+        message_doc = frappe.get_doc("WhatsApp Message", message_name)
+        # Clear the prior message_id so the template send path (which gates
+        # on `not self.message_id`) runs again.
+        message_doc.message_id = None
+        message_doc.status = "Queued"
+        message_doc.db_update()
+        try:
+            message_doc.send_outgoing()
+            message_doc.status = "Success"
+            message_doc.db_update()
+        except Exception:
+            message_doc.status = "Failed"
+            message_doc.db_update()
+            frappe.log_error(
+                title=f"WhatsApp bulk retry failed: {message_doc.name}"
+            )
         
     def get_progress(self):
         """Get sending progress for this bulk message"""
@@ -161,4 +195,30 @@ class BulkWhatsAppMessage(Document):
             "failed": failed,
             "queued": queued,
             "percent": (sent / total * 100) if total else 0
+        }
+
+    def get_mpm_action_json(self):
+        """Constructs the Meta 'action' JSON by fetching Catalog ID from the Account"""
+        if not self.whatsapp_account or not self.thumbnail_product_retailer_id or not self.product_ids:
+            return None
+
+        raw_ids = self.product_ids
+        # Clean the product list from the user input
+        # Convert to a set to remove duplicates, then back to a list
+        product_list = list(dict.fromkeys([p.strip() for p in raw_ids.split(",") if p.strip()]))
+
+        if len(product_list) > 30:
+            product_list = product_list[:30]
+            frappe.msgprint(_("Note: Only the first 30 products were included due to WhatsApp limitations."),
+                            indicator="orange")
+        return {
+            "thumbnail_product_retailer_id": self.thumbnail_product_retailer_id,
+            "sections": [
+                {
+                    "title": self.mpm_header or "Our Products",
+                    "product_items": [
+                        {"product_retailer_id": pid} for pid in product_list
+                    ]
+                }
+            ]
         }
