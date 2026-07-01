@@ -10,6 +10,7 @@
   "default_outgoing_account",
   "enabled",
   "allow_auto_read_receipt",
+  "disable_whatsapp_profiles",
   "token",
   "url",
   "version",
@@ -85,6 +86,13 @@
    "fieldname": "allow_auto_read_receipt",
    "fieldtype": "Check",
    "label": "Allow Auto Read Receipt"
+  },
+  {
+   "default": "0",
+   "description": "When checked, a WhatsApp Profiles record is NOT auto-created per phone number on each message. Enable this if you rely on WhatsApp Contact / Leads instead.",
+   "fieldname": "disable_whatsapp_profiles",
+   "fieldtype": "Check",
+   "label": "Disable WhatsApp Profile Creation"
   }
  ],
  "grid_page_length": 50,

@@ -13,6 +13,13 @@ from frappe.utils.safe_exec import get_safe_globals, safe_exec
 from frappe_whatsapp.utils import get_whatsapp_account
 
 
+# Scheduled sends fan out onto the long queue in chunks so a single large notification
+# can't pin one worker with serial Meta calls (and the scheduler tick returns at once).
+NOTIFICATION_SEND_QUEUE = "long"
+NOTIFICATION_CHUNK_SIZE = 50
+NOTIFICATION_CHUNK_TIMEOUT = 1500
+
+
 class WhatsAppNotification(Document):
     """Notification."""
 
@@ -57,25 +64,47 @@ class WhatsAppNotification(Document):
         template = frappe.db.get_value(
             "WhatsApp Templates", self.template, fieldname="*"
         )
+        if not (template and template.language_code):
+            return
 
-        if template and template.language_code:
-            if self.get("_contact_list"):
-                # send simple template without a doc to get field data.
-                self.send_simple_template(template)
-            elif self.get("_data_list"):
-                # allow send a dynamic template using schedule event config
-                # _doc_list shoud be [{"name": "xxx", "phone_no": "123"}]
-                for data in self._data_list:
-                    doc = frappe.get_doc(self.reference_doctype, data.get("name"))
+        # Fan the actual Meta sends out onto the long queue in chunks (see
+        # _enqueue_send_chunks) instead of looping them synchronously here, so a large
+        # recipient list can't pin the worker running this notification.
+        if self.get("_contact_list"):
+            # send simple template without a doc to get field data.
+            self._enqueue_send_chunks("send_simple_template", self._contact_list)
+        elif self.get("_data_list"):
+            # send a dynamic template using schedule event config;
+            # _data_list should be [{"name": "xxx", "phone_no": "123"}]
+            self._enqueue_send_chunks("send_data_templates", self._data_list)
 
-                    self.send_template_message(
-                        doc, data.get("phone_no"), template, True
-                    )
-        # return _globals.frappe.flags
+    def _enqueue_send_chunks(self, method, items):
+        """Enqueue `method` on the long queue once per chunk of `items`, so the
+        per-recipient Meta calls are spread across workers instead of blocking one.
+        Each chunk re-fetches the template itself, so nothing large is serialised."""
+        items = list(items or [])
+        for start in range(0, len(items), NOTIFICATION_CHUNK_SIZE):
+            frappe.enqueue_doc(
+                self.doctype,
+                self.name,
+                method,
+                queue=NOTIFICATION_SEND_QUEUE,
+                timeout=NOTIFICATION_CHUNK_TIMEOUT,
+                items=items[start:start + NOTIFICATION_CHUNK_SIZE],
+            )
 
-    def send_simple_template(self, template):
-        """send simple template without a doc to get field data"""
-        for contact in self._contact_list:
+    def send_simple_template(self, template=None, items=None):
+        """Send a doc-less template to each contact.
+
+        Chunk-worker entry point: when enqueued, `items` is the chunk of contacts and
+        `template` is re-fetched here; called directly it falls back to `_contact_list`.
+        """
+        if template is None:
+            template = frappe.db.get_value(
+                "WhatsApp Templates", self.template, fieldname="*"
+            )
+        contacts = items if items is not None else (self.get("_contact_list") or [])
+        for contact in contacts:
             data = {
                 "messaging_product": "whatsapp",
                 "to": self.format_number(contact),
@@ -88,6 +117,21 @@ class WhatsAppNotification(Document):
             }
             self.content_type = template.get("header_type", "text").lower()
             self.notify(data)
+
+    def send_data_templates(self, template=None, items=None):
+        """Send a dynamic (doc-backed) template to each {name, phone_no} entry.
+
+        Chunk-worker entry point: when enqueued, `items` is the chunk and `template` is
+        re-fetched here; called directly it falls back to `_data_list`.
+        """
+        if template is None:
+            template = frappe.db.get_value(
+                "WhatsApp Templates", self.template, fieldname="*"
+            )
+        data_list = items if items is not None else (self.get("_data_list") or [])
+        for data in data_list:
+            doc = frappe.get_doc(self.reference_doctype, data.get("name"))
+            self.send_template_message(doc, data.get("phone_no"), template, True)
 
     def send_template_message(
         self,
@@ -420,9 +464,8 @@ class WhatsAppNotification(Document):
         return number
 
     def get_documents_for_today(self):
-        """get list of documents that will be triggered today"""
-        docs = []
-
+        """Enqueue today's due reference documents for sending, in chunks on the long
+        queue, so a doctype with many matching rows can't block one worker."""
         diff_days = self.days_in_advance
         if self.doctype_event == "Days After":
             diff_days = -diff_days
@@ -440,10 +483,13 @@ class WhatsAppNotification(Document):
             ],
         )
 
-        for d in doc_list:
-            doc = frappe.get_doc(self.reference_doctype, d.name)
+        self._enqueue_send_chunks("send_today_documents", [d.name for d in doc_list])
+
+    def send_today_documents(self, items=None):
+        """Chunk-worker: send the notification template for each reference document name."""
+        for name in items or []:
+            doc = frappe.get_doc(self.reference_doctype, name)
             self.send_template_message(doc)
-            # print(doc.name)
 
 
 @frappe.whitelist()
@@ -473,5 +519,12 @@ def trigger_notifications(method="daily"):
             },
         )
         for d in doc_list:
-            alert = frappe.get_doc("WhatsApp Notification", d.name)
-            alert.get_documents_for_today()
+            # Enqueue per notification so the scheduler tick returns immediately and each
+            # notification's document scan + sends run off the scheduler worker.
+            frappe.enqueue_doc(
+                "WhatsApp Notification",
+                d.name,
+                "get_documents_for_today",
+                queue="long",
+                timeout=1500,
+            )

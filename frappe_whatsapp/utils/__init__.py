@@ -147,7 +147,9 @@ def trigger_whatsapp_notifications_monthly_long():
 
 
 def trigger_whatsapp_notifications(event):
-    """Run cron."""
+    """Run cron: enqueue each matching scheduled notification onto the long queue so the
+    scheduler tick returns immediately and notifications fan out across workers instead of
+    blocking one worker with serial Meta calls."""
     wa_notify_list = frappe.get_list(
         "WhatsApp Notification",
         filters={
@@ -157,10 +159,13 @@ def trigger_whatsapp_notifications(event):
     )
 
     for wa in wa_notify_list:
-        frappe.get_doc(
+        frappe.enqueue_doc(
             "WhatsApp Notification",
             wa.name,
-        ).send_scheduled_message()
+            "send_scheduled_message",
+            queue="long",
+            timeout=1500,
+        )
 
 def get_whatsapp_account(phone_id=None, account_type='incoming'):
     """map whatsapp account with message"""

@@ -3,6 +3,7 @@
 import json
 import frappe
 from frappe import _, throw
+from frappe.utils import cint
 from frappe.model.document import Document
 from frappe.integrations.utils import make_post_request
 import urllib.parse
@@ -32,14 +33,34 @@ class WhatsAppMessage(Document):
             frappe.db.set_value("WhatsApp Profiles", profile_id, "profile_name", self.profile_name)
 
     def create_whatsapp_profile(self):
-        number = format_number(self.get("from") or self.to)
-        if not frappe.db.exists("WhatsApp Profiles", {"number": number}):
+        # Opt-out switch in WhatsApp Settings. An absent single value casts to 0, which
+        # coincides with the default (create), so existing/fresh sites keep current
+        # behaviour; only an explicit 1 ("Disable WhatsApp Profile Creation") skips it.
+        if cint(frappe.db.get_single_value("WhatsApp Settings", "disable_whatsapp_profiles")):
+            return
+
+        raw_number = self.get("from") or self.to
+        if not raw_number:
+            return
+        number = format_number(raw_number)
+        if frappe.db.exists("WhatsApp Profiles", {"number": number}):
+            return
+
+        # `number` is unique: two concurrent messages from the same new number can both
+        # pass the exists() check above, so the loser of the race hits the unique index.
+        # Contain that failure in a savepoint so it can never abort the parent WhatsApp
+        # Message insert.
+        savepoint = "create_whatsapp_profile"
+        try:
+            frappe.db.savepoint(savepoint)
             frappe.get_doc({
                 "doctype": "WhatsApp Profiles",
                 "profile_name": self.profile_name,
                 "number": number,
                 "whatsapp_account": self.whatsapp_account
             }).insert(ignore_permissions=True)
+        except (frappe.UniqueValidationError, frappe.DuplicateEntryError):
+            frappe.db.rollback(save_point=savepoint)
 
     def set_whatsapp_account(self):
         """Set whatsapp account to default if missing"""
