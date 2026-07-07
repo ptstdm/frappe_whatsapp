@@ -10,7 +10,9 @@
   "type",
   "status",
   "to",
+  "to_normalized",
   "from",
+  "from_normalized",
   "profile_name",
   "use_template",
   "template",
@@ -43,8 +45,6 @@
   "bulk_message_reference",
   "column_break_efrb",
   "reference_name",
-  "to_normalized",
-  "from_normalized",
   "template_button_parameters"
  ],
  "fields": [
@@ -95,6 +95,7 @@
    "fieldname": "template",
    "fieldtype": "Link",
    "label": "Template",
+   "mandatory_depends_on": "eval:doc.use_template == 1",
    "options": "WhatsApp Templates"
   },
   {

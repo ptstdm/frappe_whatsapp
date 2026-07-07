@@ -44,6 +44,13 @@ def execute():
             return
 
         enabled = old_settings.get("enabled")
+        # webhook_verify_token is a Password field, so its real value is in __Auth;
+        # tabSingles only holds the masked "******" placeholder. Read the decrypted
+        # value (not old_settings, which came from tabSingles) or the account ends up
+        # with a literal "******" that breaks Meta webhook re-verification.
+        webhook_verify_token = get_decrypted_password(
+            "WhatsApp Settings", "WhatsApp Settings", "webhook_verify_token", raise_exception=False
+        )
         account = frappe.get_doc({
             "doctype": "WhatsApp Account",
             "account_name": "Default WhatsApp Account",
@@ -52,7 +59,7 @@ def execute():
             "app_id": old_settings.get("app_id"),
             "url": old_settings.get("url"),
             "version": old_settings.get("version"),
-            "webhook_verify_token": old_settings.get("webhook_verify_token"),
+            "webhook_verify_token": webhook_verify_token,
             "is_default_incoming": 1,
             "is_default_outgoing": 1,
             "status": "Active" if enabled in (1, "1") else "Inactive",
