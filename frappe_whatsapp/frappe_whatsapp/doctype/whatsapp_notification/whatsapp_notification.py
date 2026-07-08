@@ -57,9 +57,20 @@ class WhatsAppNotification(Document):
 
     def send_scheduled_message(self) -> dict:
         """Specific to API endpoint Server Scripts."""
-        safe_exec(  # nosemgrep: frappe-codeinjection-eval -- safe_exec is Frappe's sandboxed eval; condition is admin-write-gated
-            self.condition, get_safe_globals(), dict(doc=self)
-        )
+        # The condition is an admin-authored script; it evaluates with doc=self (this
+        # notification) and is expected to populate _contact_list / _data_list. If it raises
+        # (e.g. a mis-authored condition that references reference-doc fields), log it and
+        # bail for this notification only — don't crash the enqueued job / re-fail every tick.
+        try:
+            safe_exec(  # nosemgrep: frappe-codeinjection-eval -- safe_exec is Frappe's sandboxed eval; condition is admin-write-gated
+                self.condition, get_safe_globals(), dict(doc=self)
+            )
+        except Exception:
+            frappe.log_error(
+                title=f"WhatsApp scheduled notification condition failed: {self.name}",
+                message=frappe.get_traceback(),
+            )
+            return
 
         template = frappe.db.get_value(
             "WhatsApp Templates", self.template, fieldname="*"

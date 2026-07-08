@@ -150,9 +150,15 @@ def trigger_whatsapp_notifications(event):
     """Run cron: enqueue each matching scheduled notification onto the long queue so the
     scheduler tick returns immediately and notifications fan out across workers instead of
     blocking one worker with serial Meta calls."""
+    # Only Scheduler Event notifications belong in this flow. DocType Event notifications
+    # (real-time doc_events, or Days Before/After) are handled elsewhere; some of them carry
+    # a stray event_frequency (the field defaults to "All"), so without this type filter they
+    # get mis-run through send_scheduled_message, whose condition evaluates with doc=self and
+    # throws on any reference-doc field (e.g. `doc.balance > 0`).
     wa_notify_list = frappe.get_list(
         "WhatsApp Notification",
         filters={
+            "notification_type": "Scheduler Event",
             "event_frequency": event,
             "disabled": 0,
         }
