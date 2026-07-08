@@ -3,7 +3,7 @@
 import json
 import frappe
 from frappe import _, throw
-from frappe.utils import cint
+from frappe.utils import cint, add_to_date, now_datetime
 from frappe.model.document import Document
 from frappe.integrations.utils import make_post_request
 import urllib.parse
@@ -468,6 +468,36 @@ class WhatsAppMessage(Document):
             res = frappe.flags.integration_request.json().get("error", {})
             error_message = res.get("Error", res.get("message"))
             frappe.log_error("WhatsApp API Error", f"{error_message}\n{res}")
+
+    @staticmethod
+    def clear_old_logs(days=90):
+        """Delete WhatsApp Messages older than `days`.
+
+        Registered with Frappe's Log Settings via the `default_log_clearing_doctypes`
+        hook, so the daily log-cleanup job trims old incoming/outgoing messages
+        (default 90 days, editable under Log Settings). Keyed on `creation` so it
+        means "message is older than N days" regardless of later status webhooks
+        bumping `modified`. Deleted in batches because this table grows into the
+        hundreds of thousands of rows and a single unbounded DELETE would hold a
+        long table lock and bloat the transaction.
+        """
+        cutoff = add_to_date(now_datetime(), days=-cint(days))
+        while True:
+            names = frappe.get_all(
+                "WhatsApp Message",
+                filters={"creation": ["<", cutoff]},
+                pluck="name",
+                order_by="creation asc",
+                limit=10000,
+            )
+            if not names:
+                break
+            frappe.db.delete("WhatsApp Message", {"name": ["in", names]})
+            # nosemgrep: frappe-manual-commit -- batched cleanup runs inside the scheduled
+            # log-clean-up job (outside request scope); commit each batch so table locks and
+            # the undo log don't grow unbounded while deleting large backlogs.
+            frappe.db.commit()
+
 
 def on_doctype_update():
     frappe.db.add_index("WhatsApp Message", ["reference_doctype", "reference_name"])

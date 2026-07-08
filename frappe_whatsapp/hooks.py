@@ -145,6 +145,16 @@ scheduler_events = {
     ],
 }
 
+# Log Clearing
+# ------------
+# Register WhatsApp Message with Frappe's Log Settings so the daily
+# `run_log_clean_up` job auto-trims old incoming/outgoing messages. The number
+# below is the default retention (days); admins can change it under Log Settings.
+# Deletion itself is implemented in WhatsAppMessage.clear_old_logs.
+default_log_clearing_doctypes = {
+    "WhatsApp Message": 90,
+}
+
 # Testing
 # -------
 
