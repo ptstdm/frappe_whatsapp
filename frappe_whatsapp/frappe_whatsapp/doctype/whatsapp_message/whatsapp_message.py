@@ -256,6 +256,13 @@ class WhatsAppMessage(Document):
 
             self.template_parameters = json.dumps(template_parameters)
 
+        # Populate `message` with the rendered template body so the conversation panel
+        # (and anything else that reads `message`) shows real text instead of an empty
+        # bubble. Only when the caller hasn't already supplied a display body — template
+        # sends via `send_template` otherwise leave `message` blank.
+        if not self.message:
+            self.message = self._render_template_body(template, template_parameters)
+
         # Always add the body component, even if parameters list is empty
         data["template"]["components"].append({
             "type": "body",
@@ -392,6 +399,15 @@ class WhatsAppMessage(Document):
                 data['template']['components'].extend(button_parameters)
 
         self.notify(data)
+
+    def _render_template_body(self, template, template_parameters):
+        """Build a human-readable body from a WhatsApp template + its ordered parameters,
+        substituting {{1}}, {{2}}, ... placeholders. Display-only (chat panel / list view);
+        the actual send uses the structured `components` payload, not this string."""
+        body = template.template or ""
+        for index, value in enumerate(template_parameters, start=1):
+            body = body.replace("{{%d}}" % index, "" if value is None else str(value))
+        return body.strip()
 
     def notify(self, data):
         """Notify."""
