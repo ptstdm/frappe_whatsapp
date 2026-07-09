@@ -9,6 +9,7 @@
   "label",
   "type",
   "status",
+  "failure_reason",
   "to",
   "to_normalized",
   "from",
@@ -69,6 +70,14 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Status",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.failure_reason",
+   "description": "Meta delivery-failure code + title (e.g. '131049 - This message was not delivered to maintain healthy ecosystem engagement.')",
+   "fieldname": "failure_reason",
+   "fieldtype": "Small Text",
+   "label": "Failure Reason",
    "read_only": 1
   },
   {

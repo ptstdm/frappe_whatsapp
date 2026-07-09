@@ -317,6 +317,27 @@ def update_template_status(data):
 		data
 	)
 
+def _extract_failure_reason(status_info):
+	"""Build a compact failure reason from a Meta 'failed' status payload.
+
+	Meta puts the reason in statuses[].errors[]; we keep code + title (+ details when
+	they add signal) so the WhatsApp Message row records *why* it failed, e.g.
+	"131049 - This message was not delivered to maintain healthy ecosystem engagement.".
+	Returns None when there is no error (sent/delivered/read).
+	"""
+	errors = status_info.get("errors") or []
+	if not errors:
+		return None
+	err = errors[0]
+	code = err.get("code")
+	title = err.get("title") or err.get("message")
+	details = (err.get("error_data") or {}).get("details")
+	reason = " - ".join(str(p) for p in (code, title) if p)
+	if details and details != title:
+		reason = f"{reason} ({details})" if reason else str(details)
+	return reason or None
+
+
 def update_message_status(data):
 	"""Enqueue the WhatsApp delivery-status update off the request path.
 
@@ -336,6 +357,7 @@ def update_message_status(data):
 		message_id=status_info["id"],
 		status=status_info["status"],
 		conversation=status_info.get("conversation", {}).get("id"),
+		failure_reason=_extract_failure_reason(status_info),
 	)
 
 
@@ -348,7 +370,7 @@ def _whatsapp_status_queue():
 	return "whatsapp" if "whatsapp" in get_queues_timeout() else "short"
 
 
-def apply_whatsapp_message_status(message_id, status, conversation=None):
+def apply_whatsapp_message_status(message_id, status, conversation=None, failure_reason=None):
 	"""Background job: apply a WhatsApp delivery-status update, retrying through transient lock conflicts.
 
 	Meta delivers sent/delivered/read (+ retries) as separate callbacks for the same message, and the chat
@@ -377,6 +399,8 @@ def apply_whatsapp_message_status(message_id, status, conversation=None):
 			values = {"status": status}
 			if conversation:
 				values["conversation_id"] = conversation
+			if failure_reason:
+				values["failure_reason"] = failure_reason
 			frappe.db.set_value("WhatsApp Message", name, values)
 			frappe.db.commit()
 			return
