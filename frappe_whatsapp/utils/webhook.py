@@ -1,7 +1,6 @@
 """Webhook."""
 import json
-# import random
-# import time
+
 
 import frappe
 import requests
