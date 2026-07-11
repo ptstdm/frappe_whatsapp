@@ -1,7 +1,7 @@
 """Webhook."""
 import json
-import random
-import time
+# import random
+# import time
 
 import frappe
 import requests
@@ -9,6 +9,7 @@ from frappe.utils.password import get_decrypted_password
 from werkzeug.wrappers import Response
 import frappe.utils
 from frappe.utils.background_jobs import get_queues_timeout
+from frappe_whatsapp.utils.db_retry import run_with_deadlock_retry
 
 # A WhatsApp status UPDATE can hit a transient 1020/1213 under innodb_snapshot_isolation when concurrent
 # Meta callbacks (sent/delivered/read) + the chat "mark as read" race the same row. Retry through it — the
@@ -247,50 +248,34 @@ def _whatsapp_status_queue():
 
 
 def apply_whatsapp_message_status(message_id, status, conversation=None):
-	"""Background job: apply a WhatsApp delivery-status update, retrying through transient lock conflicts.
+	"""Background job: apply a WhatsApp delivery-status update."""
 
-	Meta delivers sent/delivered/read (+ retries) as separate callbacks for the same message, and the chat
-	"mark as read" writes the same row, so concurrent status writes race. Under MariaDB snapshot isolation
-	(innodb_snapshot_isolation=ON) a plain UPDATE then raises ER_CHECKREAD (1020) when another connection
-	committed a change to this row since this transaction's read view. The status write is last-writer-wins +
-	idempotent (a missed callback re-applies on the next one), so we just retry: we roll back once up front (a
-	reused worker connection can carry an open transaction with a stale read view) and again after each transient
-	conflict — every `frappe.db.rollback()` re-begins the transaction with a fresh snapshot — then re-apply, with
-	jittered backoff. Non-fatal — a status for a message we don't store no-ops, and exhausted retries are logged only.
-
-	(We previously tried to run this under READ COMMITTED, but `frappe.db.rollback()` re-begins the transaction
-	with no isolation clause, so the UPDATE still ran at REPEATABLE READ — the retry is isolation-agnostic.)
-	"""
-	# A reused RQ worker connection can carry an open transaction (stale read view) from a prior job; end it so
-	# attempt 1 also starts from a fresh snapshot, not just the post-conflict retries.
+	# Fresh snapshot before first attempt
 	frappe.db.rollback()
-	for attempt in range(_STATUS_RETRY_ATTEMPTS):
-		try:
-			name = frappe.db.get_value("WhatsApp Message", {"message_id": message_id})
-			if not name:
-				# Status for a message not stored here (e.g. sent from another system) — nothing to update.
-				# Roll back so this job's read view isn't left open on the shared worker connection.
-				frappe.db.rollback()
-				return
-			values = {"status": status}
-			if conversation:
-				values["conversation_id"] = conversation
-			frappe.db.set_value("WhatsApp Message", name, values)
-			frappe.db.commit()
-			return
-		except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
-			frappe.db.rollback()  # re-begins the txn → next attempt reads from a fresh snapshot
-			if attempt == _STATUS_RETRY_ATTEMPTS - 1:
-				frappe.log_error(
-					title="apply_whatsapp_message_status failed",
-					message=f"message_id={message_id}, status={status}\n{frappe.get_traceback()}",
-				)
-				return
-			time.sleep(_STATUS_RETRY_BASE_S * (2**attempt) + random.uniform(0, _STATUS_RETRY_BASE_S))
-		except Exception:
+
+	def _op():
+		name = frappe.db.get_value("WhatsApp Message", {"message_id": message_id})
+		if not name:
+			# Message doesn't exist here
 			frappe.db.rollback()
-			frappe.log_error(
-				title="apply_whatsapp_message_status failed",
-				message=f"message_id={message_id}, status={status}\n{frappe.get_traceback()}",
-			)
 			return
+
+		values = {"status": status}
+		if conversation:
+			values["conversation_id"] = conversation
+
+		frappe.db.set_value("WhatsApp Message", name, values)
+		frappe.db.commit()
+
+	return run_with_deadlock_retry(
+		op=_op,
+		attempts=_STATUS_RETRY_ATTEMPTS,
+		backoff_base=_STATUS_RETRY_BASE_S,
+		exceptions=(
+			frappe.QueryDeadlockError,
+			frappe.QueryTimeoutError,
+		),
+		log_title="apply_whatsapp_message_status failed",
+		log_context=f"message_id={message_id}, status={status}",
+		on_exhausted="log",
+	)
