@@ -8,10 +8,25 @@ import frappe
 from frappe_whatsapp.testing import IntegrationTestCase
 
 from frappe_whatsapp.utils.webhook import (
+    apply_whatsapp_message_status,
     update_message_status,
     update_status,
     update_template_status,
 )
+
+
+def _run_status_inline(method=None, **kwargs):
+    """Test helper: execute the enqueued status-update job synchronously.
+
+    `update_message_status` now enqueues `apply_whatsapp_message_status`
+    (enqueue_after_commit) instead of writing inline, so tests patch
+    `frappe.enqueue` with this to run the job in-process and assert the result.
+    """
+    apply_whatsapp_message_status(
+        message_id=kwargs["message_id"],
+        status=kwargs["status"],
+        conversation=kwargs.get("conversation"),
+    )
 
 
 class TestWebhookHelpers(IntegrationTestCase):
@@ -90,7 +105,8 @@ class TestWebhookHelpers(IntegrationTestCase):
                 "conversation": {"id": "conv_123"}
             }]
         }
-        update_message_status(data)
+        with patch("frappe_whatsapp.utils.webhook.frappe.enqueue", side_effect=_run_status_inline):
+            update_message_status(data)
 
         msg.reload()
         self.assertEqual(msg.status, "delivered")
@@ -117,7 +133,8 @@ class TestWebhookHelpers(IntegrationTestCase):
                 "status": "sent",
             }]
         }
-        update_message_status(data)
+        with patch("frappe_whatsapp.utils.webhook.frappe.enqueue", side_effect=_run_status_inline):
+            update_message_status(data)
 
         msg.reload()
         self.assertEqual(msg.status, "sent")
@@ -391,7 +408,8 @@ class TestWebhookEndpoint(IntegrationTestCase):
         }
         frappe.local.form_dict = frappe._dict(payload)
 
-        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request), \
+                patch("frappe_whatsapp.utils.webhook.frappe.enqueue", side_effect=_run_status_inline):
             from frappe_whatsapp.utils.webhook import webhook
             webhook()
 
