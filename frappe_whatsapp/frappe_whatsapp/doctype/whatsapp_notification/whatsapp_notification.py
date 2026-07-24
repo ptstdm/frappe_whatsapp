@@ -1,6 +1,8 @@
 """Notification."""
 
 import json
+import urllib.parse
+
 import frappe
 
 from frappe import _dict, _
@@ -214,12 +216,17 @@ class WhatsAppNotification(Document):
                 for idx, btn in enumerate(template.buttons):
                     if btn.button_type == "Visit Website" and btn.url_type == "Dynamic":
                         if button_fields:
+                            btn_value = doc.get(button_fields.pop(0))
                             data['template']['components'].append({
                                 "type": "button",
                                 "sub_type": "url",
                                 "index": str(idx),
                                 "parameters": [
-                                    {"type": "text", "text": doc.get(button_fields.pop(0))}
+                                    # URL-encode the dynamic URL parameter: a raw value containing a
+                                    # space/special char (e.g. a lead named "Deepak Pawar-2026-...")
+                                    # produces an invalid URL that Meta rejects with a 400. Mirrors the
+                                    # encoding already done on the WhatsApp Message send path.
+                                    {"type": "text", "text": urllib.parse.quote(str(btn_value)) if btn_value else btn_value}
                                 ]
                             })
                     elif btn.button_type == "Multi-Product Message":
