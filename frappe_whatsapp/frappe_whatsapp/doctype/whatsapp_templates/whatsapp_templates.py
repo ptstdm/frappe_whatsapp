@@ -33,7 +33,7 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
         if not self.whatsapp_account:
             default_whatsapp_account = get_whatsapp_account()
             if not default_whatsapp_account:
-                throw(_("Please set a default outgoing WhatsApp Account or Select available WhatsApp Account"))
+                frappe.throw(frappe._("Please set a default outgoing WhatsApp Account or Select available WhatsApp Account"))
             else:
                 self.whatsapp_account = default_whatsapp_account.name
 
