@@ -227,6 +227,8 @@ class WhatsAppNotification(Document):
                     }
                 )
 
+            url = None
+            filename = None
             if self.attach_document_print:
                 key = doc.get_document_share_key()  # noqa
                 print_format = "Standard"
@@ -356,8 +358,9 @@ class WhatsAppNotification(Document):
             "authorization": f"Bearer {token}",
             "content-type": "application/json",
         }
+        success = False
+        error_message = None
         try:
-            success = False
             response = make_post_request(
                 f"{whatsapp_account.url}/{whatsapp_account.version}/{whatsapp_account.phone_id}/messages",
                 headers=headers, data=json.dumps(data)
