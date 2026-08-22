@@ -11,8 +11,29 @@ assignment, etc.) *before* calling. Exposing them directly would let any caller 
 to any number, bypassing every surface's gate.
 """
 
+import re
+
 import frappe
 from frappe.utils import add_to_date, cint, now_datetime
+
+
+def _phone_match_key(number):
+    """Canonical match key for the ``from_normalized`` column.
+
+    leanerp owns the normalizer (national significant number) AND is the app that
+    writes ``from_normalized``, so when it is installed the two always agree. Without
+    leanerp the column doesn't exist either (it ships via leanerp_whatsapp, which
+    requires leanerp) — the legacy last-10-digits slice then feeds the LIKE fallback.
+    """
+    try:
+        from leanerp.utils.helper import normalize_phone
+
+        return normalize_phone(number)
+    except ImportError:
+        digits = re.sub(r"\D", "", str(number or ""))
+        if not digits:
+            return None
+        return digits[-10:]
 
 
 def send_text(to, message, reference_doctype=None, reference_name=None):
@@ -69,14 +90,14 @@ def reply_window_open(to, hours):
     the query itself is generic and belongs with the WhatsApp Message table. Prefers the
     indexed ``from_normalized`` column (equality) over a leading-wildcard LIKE full scan.
     """
-    if not to:
+    key = _phone_match_key(to)
+    if not key:
         return False
-    last10 = to[-10:]
     cutoff = add_to_date(now_datetime(), hours=-cint(hours))
     if frappe.db.has_column("WhatsApp Message", "from_normalized"):
-        from_filter = {"from_normalized": last10}
+        from_filter = {"from_normalized": key}
     else:
-        from_filter = {"from": ["like", f"%{last10}"]}
+        from_filter = {"from": ["like", f"%{key}"]}
     # type="Incoming" makes "inbound" explicit — an outgoing row that happens to carry
     # the contact in `from` must never be read as the customer having replied.
     return bool(
