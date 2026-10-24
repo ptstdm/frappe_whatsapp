@@ -315,6 +315,41 @@ class TestWebhookEndpoint(IntegrationTestCase):
         self.assertEqual(msg.content_type, "reaction")
         self.assertEqual(msg.message, "\U0001f44d")
 
+    def test_webhook_post_reaction_removed_message(self):
+        """Test POST webhook with reaction removal (Meta omits emoji)."""
+        mock_request = self._make_mock_request("POST")
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "metadata": {"phone_number_id": "webhook_ep_phone_id"},
+                        "contacts": [{"profile": {"name": "Unreactor"}}],
+                        "messages": [{
+                            "from": "919900112294",
+                            "id": "wamid.webhook_ep_reaction_2",
+                            "type": "reaction",
+                            "reaction": {
+                                "message_id": "wamid.original_reacted_to"
+                            },
+                        }]
+                    }
+                }]
+            }]
+        }
+        frappe.local.form_dict = frappe._dict(payload)
+
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+            from frappe_whatsapp.utils.webhook import webhook
+            webhook()
+
+        self.assertTrue(
+            frappe.db.exists("WhatsApp Message", {"message_id": "wamid.webhook_ep_reaction_2"})
+        )
+        msg = frappe.get_doc("WhatsApp Message", {"message_id": "wamid.webhook_ep_reaction_2"})
+        self.assertEqual(msg.content_type, "reaction")
+        self.assertFalse(msg.message)
+        self.assertEqual(msg.reply_to_message_id, "wamid.original_reacted_to")
+
     def test_webhook_post_button_message(self):
         """Test POST webhook with button reply message."""
         mock_request = self._make_mock_request("POST")
