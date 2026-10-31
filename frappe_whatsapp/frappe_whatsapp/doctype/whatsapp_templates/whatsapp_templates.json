@@ -12,6 +12,7 @@
   "column_break_bthp",
   "status",
   "id",
+  "meta_last_updated_on",
   "section_break_fxqh",
   "template",
   "sample_values",
@@ -33,7 +34,9 @@
   "need_button_in_template",
   "template_buttons_json",
   "need_dynamic_button_url_parameter",
-  "field_name_for_button_parameter"
+  "field_name_for_button_parameter",
+  "section_break_meta_edits",
+  "meta_edits"
  ],
  "fields": [
   {
@@ -92,6 +95,13 @@
    "fieldname": "id",
    "fieldtype": "Data",
    "label": "ID",
+   "read_only": 1
+  },
+  {
+   "description": "Meta's last create or edit time, set by Sync from Meta",
+   "fieldname": "meta_last_updated_on",
+   "fieldtype": "Datetime",
+   "label": "Last Updated at Meta",
    "read_only": 1
   },
   {
@@ -196,12 +206,27 @@
    "fieldname": "need_button_in_template",
    "fieldtype": "Check",
    "label": "Need Button in Template"
+  },
+  {
+   "collapsible": 1,
+   "depends_on": "eval:!doc.__islocal",
+   "fieldname": "section_break_meta_edits",
+   "fieldtype": "Section Break",
+   "label": "Meta Edit History"
+  },
+  {
+   "description": "Successful edits sent to Meta, used for Meta's edit limit",
+   "fieldname": "meta_edits",
+   "fieldtype": "Table",
+   "label": "Meta Edits",
+   "options": "WhatsApp Template Meta Edit",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-03 20:39:48.979892",
+ "modified": "2026-10-30 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Frappe Whatsapp",
  "name": "WhatsApp Templates",
