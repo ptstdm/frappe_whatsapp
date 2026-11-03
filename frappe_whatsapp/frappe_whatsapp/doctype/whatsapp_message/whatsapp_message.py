@@ -9,6 +9,8 @@ from frappe.integrations.utils import make_post_request
 import urllib.parse
 
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
+from frappe_whatsapp.utils import is_whatsapp_sending_blocked
+
 
 class WhatsAppMessage(Document):
     def validate(self):
@@ -411,6 +413,9 @@ class WhatsAppMessage(Document):
 
     def notify(self, data):
         """Notify."""
+        if is_whatsapp_sending_blocked():
+            return
+
         whatsapp_account = frappe.get_doc(
             "WhatsApp Account",
             self.whatsapp_account,
@@ -451,6 +456,9 @@ class WhatsAppMessage(Document):
 
     @frappe.whitelist()
     def send_read_receipt(self):
+        if is_whatsapp_sending_blocked():
+            return
+
         data = {
             "messaging_product": "whatsapp",
             "status": "read",

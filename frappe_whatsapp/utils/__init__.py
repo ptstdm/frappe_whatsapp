@@ -4,6 +4,15 @@ import frappe
 from frappe.core.doctype.server_script.server_script_utils import EVENT_MAP
 
 
+def is_whatsapp_sending_blocked():
+    """True on local dev sites (localhost / *.localhost), so they never message real numbers."""
+    site = (frappe.local.site or "").lower()
+    if site == "localhost" or site.endswith(".localhost"):
+        return True
+
+    return False
+
+
 def run_server_script_for_doc_event(doc, event):
     """Run on each event."""
     if event not in EVENT_MAP:

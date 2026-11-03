@@ -20,6 +20,7 @@ from frappe_whatsapp.utils import get_whatsapp_account
 NOTIFICATION_SEND_QUEUE = "long"
 NOTIFICATION_CHUNK_SIZE = 50
 NOTIFICATION_CHUNK_TIMEOUT = 1500
+from frappe_whatsapp.utils import is_whatsapp_sending_blocked
 
 
 class WhatsAppNotification(Document):
@@ -343,6 +344,9 @@ class WhatsAppNotification(Document):
 
     def notify(self, data, doc_data=None):
         """Notify."""
+        if is_whatsapp_sending_blocked():
+            return
+
         # Use notification WhatsApp account if available, otherwise use a default outgoing account
         if self.whatsapp_account:
             whatsapp_account = frappe.get_doc("WhatsApp Account", self.whatsapp_account)
