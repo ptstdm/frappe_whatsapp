@@ -86,7 +86,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         # recreates a template with the same (reused) name.
         frappe.db.delete("WhatsApp Button", {"parent": ["like", "test_tmpl_%"]})
         frappe.db.delete("WhatsApp Button", {"parent": ["like", "test_msg_template%"]})
-        frappe.db.delete("WhatsApp Template Meta Edit", {"parent": ["like", "test_tmpl_%"]})
+        frappe.db.delete("WhatsApp Template Edit Timeline", {"parent": ["like", "test_tmpl_%"]})
         frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
 
     def _add_meta_edits(self, doc, *hours_ago, status="APPROVED"):

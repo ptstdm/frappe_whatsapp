@@ -227,7 +227,7 @@
    "fieldname": "meta_edits",
    "fieldtype": "Table",
    "label": "Meta Edits",
-   "options": "WhatsApp Template Meta Edit",
+   "options": "WhatsApp Template Edit Timeline",
    "read_only": 1
   }
  ],
