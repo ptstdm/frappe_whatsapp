@@ -70,6 +70,7 @@ class WhatsAppTemplates(Document):
 
         # On update, call Meta only when a Meta-stored field changed.
         if meta_changed:
+            self.sync_meta_last_updated()
             self.update_template()
 
     def validate_sample_values(self):
@@ -200,6 +201,22 @@ class WhatsAppTemplates(Document):
             frappe.throw(_("Could not reach Meta: {0}. Nothing was saved.").format(str(exc)))
         raise exc
 
+    def sync_meta_last_updated(self):
+        """Refresh Meta's last update time before sending an edit."""
+        self.get_settings()
+        try:
+            response = make_request(
+                "GET",
+                f"{self._url}/{self._version}/{self.id}",
+                headers=self._headers,
+                params={"fields": "last_updated_time"},
+            )
+        except Exception:
+            # A failed read must not stop the edit itself.
+            return
+        if response and response.get("last_updated_time"):
+            self.meta_last_updated_on = _meta_time_to_system(response["last_updated_time"])
+
     def onload(self):
         self.set_onload("meta_edit_status", self.get_meta_edit_status())
 
@@ -221,8 +238,8 @@ class WhatsAppTemplates(Document):
             if cstr(e.status).upper() == "APPROVED" and get_datetime(e.edited_on) > add_days(now, -30)
         )
         # Meta's time also covers edits made before tracking started or in WhatsApp Manager.
-        last_edits = edits[-1:] + ([get_datetime(self.meta_last_updated_on)] if self.meta_last_updated_on else [])
-        last_edit = max(last_edits, default=None)
+        meta_time = [get_datetime(self.meta_last_updated_on)] if self.meta_last_updated_on else []
+        last_edit = max(edits + meta_time, default=None)
 
         if len(edits) >= META_EDITS_PER_30_DAYS:
             next_allowed = max(add_days(edits[-META_EDITS_PER_30_DAYS], 30), add_to_date(last_edit, hours=24))

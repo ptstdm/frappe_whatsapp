@@ -98,7 +98,6 @@
    "read_only": 1
   },
   {
-   "description": "Meta's last create or edit time, set by Sync from Meta",
    "fieldname": "meta_last_updated_on",
    "fieldtype": "Datetime",
    "label": "Last Updated at Meta",

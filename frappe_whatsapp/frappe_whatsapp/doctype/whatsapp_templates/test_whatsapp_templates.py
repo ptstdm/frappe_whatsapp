@@ -74,6 +74,11 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             "is_default_outgoing": 1,
             "is_default_incoming": 1,
         })
+        # Saving a Meta field change reads Meta's last update time; keep tests off Meta.
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import WhatsAppTemplates
+        sync_patcher = patch.object(WhatsAppTemplates, "sync_meta_last_updated")
+        sync_patcher.start()
+        self.addCleanup(sync_patcher.stop)
 
     def tearDown(self):
         # Reset the request-scoped flag set by the Meta error-surfacing tests.
