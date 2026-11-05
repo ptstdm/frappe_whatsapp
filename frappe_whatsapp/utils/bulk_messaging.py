@@ -1,6 +1,6 @@
 import json
 import frappe
-from frappe.utils import cint
+from frappe.utils import cint, now
 
 
 @frappe.whitelist()
@@ -30,6 +30,66 @@ def import_recipients(list_name, doctype, mobile_field, name_field=None, filters
     doc.save()
     
     return count
+
+def process_scheduled_bulk_messages():
+    """Check for scheduled bulk messages whose time has arrived and queue them."""
+    scheduled = frappe.get_all(
+        "Bulk WhatsApp Message",
+        filters={
+            "status": "Scheduled",
+            "docstatus": 1,
+            "scheduled_time": ["<=", now()],
+        },
+        pluck="name",
+    )
+
+    for name in scheduled:
+        # Atomically claim the campaign: flip Scheduled -> Queued only while it is
+        # still a submitted, due campaign. If it was cancelled or rescheduled
+        # between the get_all() above and this write, the UPDATE matches zero rows
+        # and we skip it — a cancelled campaign is never dispatched (queue_messages
+        # does not re-check docstatus).
+        frappe.db.sql(
+            """
+            UPDATE `tabBulk WhatsApp Message`
+            SET status = 'Queued'
+            WHERE name = %(name)s
+              AND status = 'Scheduled'
+              AND docstatus = 1
+              AND scheduled_time <= %(now)s
+            """,
+            {"name": name, "now": now()},
+        )
+        claimed = frappe.db._cursor.rowcount
+
+        # The claim has to be durable before enqueuing anything. queue_messages()
+        # calls frappe.enqueue_doc, which pushes to redis immediately
+        # (enqueue_after_commit defaults to False), so if the "Queued" flip were
+        # still uncommitted when a later campaign raised, the rollback would revert
+        # this one to "Scheduled" while its recipient jobs were already queued, and
+        # the next tick would enqueue every recipient a second time.
+        # nosemgrep: frappe-manual-commit -- scheduler job outside request scope; the status must be durable before enqueue_doc hands the jobs to redis
+        frappe.db.commit()
+
+        if not claimed:
+            continue
+
+        try:
+            frappe.get_doc("Bulk WhatsApp Message", name).queue_messages()
+        except Exception:
+            # Roll back so a DB-level failure doesn't poison the transaction for
+            # the remaining campaigns (and so log_error can write).
+            frappe.db.rollback()
+            # Put the campaign name in the message (error body), not only the
+            # title: log_error stores the title in `method`, so relying on the
+            # traceback to carry `name` into `error` breaks on Python 3.14, where
+            # get_traceback no longer embeds frame locals.
+            frappe.log_error(
+                message=f"Bulk WhatsApp Message {name} failed during scheduling.\n\n"
+                + frappe.get_traceback(with_context=True),
+                title=f"Bulk WhatsApp Message scheduling failed: {name}",
+            )
+
 
 @frappe.whitelist()
 def schedule_bulk_messages():
