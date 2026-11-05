@@ -14,7 +14,6 @@ from frappe.integrations.utils import make_post_request, make_request
 from frappe.utils import (
     add_days,
     add_to_date,
-    convert_utc_to_system_timezone,
     cstr,
     format_datetime,
     get_datetime,
@@ -536,7 +535,7 @@ def _meta_time_to_system(value):
     """Convert Meta's UTC timestamp to a system-time datetime."""
     if not value:
         return None
-    return convert_utc_to_system_timezone(get_datetime(value)).replace(tzinfo=None)
+    return get_datetime(value).astimezone(pytz.timezone(get_system_timezone())).replace(tzinfo=None)
 
 @frappe.whitelist()
 def fetch():
