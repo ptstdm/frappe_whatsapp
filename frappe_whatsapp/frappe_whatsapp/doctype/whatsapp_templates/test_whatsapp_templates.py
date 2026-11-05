@@ -5,6 +5,16 @@ import json
 from unittest.mock import patch, MagicMock
 
 import frappe
+import pytz
+from frappe.utils import (
+    add_days,
+    add_to_date,
+    convert_utc_to_system_timezone,
+    format_datetime,
+    get_datetime,
+    get_system_timezone,
+    now_datetime,
+)
 from frappe_whatsapp.testing import IntegrationTestCase
 
 
@@ -64,6 +74,11 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             "is_default_outgoing": 1,
             "is_default_incoming": 1,
         })
+        # Saving a Meta field change reads Meta's last update time; keep tests off Meta.
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import WhatsAppTemplates
+        sync_patcher = patch.object(WhatsAppTemplates, "sync_meta_last_updated")
+        sync_patcher.start()
+        self.addCleanup(sync_patcher.stop)
 
     def tearDown(self):
         # Reset the request-scoped flag set by the Meta error-surfacing tests.
@@ -76,7 +91,15 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         # recreates a template with the same (reused) name.
         frappe.db.delete("WhatsApp Button", {"parent": ["like", "test_tmpl_%"]})
         frappe.db.delete("WhatsApp Button", {"parent": ["like", "test_msg_template%"]})
+        frappe.db.delete("WhatsApp Template Edit Timeline", {"parent": ["like", "test_tmpl_%"]})
         frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+
+    def _add_meta_edits(self, doc, *hours_ago, status="APPROVED"):
+        """Insert Meta edit history rows directly in DB."""
+        for hours in hours_ago:
+            doc.append("meta_edits", {"edited_on": add_to_date(now_datetime(), hours=-hours), "status": status}).db_insert()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        return frappe.get_doc("WhatsApp Templates", doc.name)
 
     def _make_template_without_hooks(self, **kwargs):
         """Create a template directly in DB to avoid Meta API calls."""
@@ -788,3 +811,147 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         )
         doc.validate_sample_values()
         self.assertEqual(doc.sample_values, "")
+
+    def test_meta_edit_status_by_status(self):
+        """Rejected and paused are unlimited; statuses other than approved show the review note."""
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_status")
+        for status, color in {"REJECTED": "blue", "PAUSED": "blue", "PENDING": "orange"}.items():
+            doc.status = status
+            self.assertEqual(doc.get_meta_edit_status().color, color, status)
+
+        doc.status = "APPROVED"
+        edit_status = doc.get_meta_edit_status()
+        self.assertEqual(edit_status.color, "blue")
+        self.assertNotIn("Edits used", edit_status.message)
+
+    def test_meta_edit_count_in_30_days(self):
+        """Only approved edits inside 30 days count, and the count is shown below the limit."""
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_count")
+        doc = self._add_meta_edits(doc, 30, 50, 100, 31 * 24)
+        doc = self._add_meta_edits(doc, 1, status="REJECTED")
+
+        edit_status = doc.get_meta_edit_status()
+        self.assertEqual(edit_status.color, "blue")
+        self.assertIn("3 of 10", edit_status.message)
+
+    def test_meta_edit_within_24_hours_shows_next_edit_time(self):
+        """An approved edit in the last 24 hours shows the next edit time 24 hours after it."""
+        doc = self._add_meta_edits(self._make_template_without_hooks(template_name="test_tmpl_edit_24h"), 2)
+
+        edit_status = doc.get_meta_edit_status()
+        self.assertEqual(edit_status.color, "orange")
+        self.assertEqual(edit_status.next_allowed, add_to_date(get_datetime(doc.meta_edits[0].edited_on), hours=24))
+
+    def test_meta_edit_times_in_user_time_zone(self):
+        """Note times are shown in the user's time zone."""
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_user_tz")
+        doc.meta_last_updated_on = get_datetime("2026-11-03 10:00:00")
+        user_tz = "UTC" if get_system_timezone() != "UTC" else "Asia/Kolkata"
+        old_tz = frappe.db.get_value("User", frappe.session.user, "time_zone")
+        frappe.db.set_value("User", frappe.session.user, "time_zone", user_tz)
+        try:
+            with patch(
+                "frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.now_datetime",
+                return_value=get_datetime("2026-11-03 12:00:00"),
+            ):
+                edit_status = doc.get_meta_edit_status()
+        finally:
+            frappe.db.set_value("User", frappe.session.user, "time_zone", old_tz)
+
+        user_time = pytz.timezone(get_system_timezone()).localize(doc.meta_last_updated_on).astimezone(pytz.timezone(user_tz))
+        self.assertIn(format_datetime(user_time.replace(tzinfo=None), "d MMM yyyy, h:mm a"), edit_status.message)
+        self.assertIn(format_datetime(add_days(user_time, 1).replace(tzinfo=None), "d MMM yyyy, h:mm a"), edit_status.message)
+
+    def test_ten_meta_edits_in_30_days_shows_next_edit_time(self):
+        """Ten approved edits in 30 days show the next edit time when the oldest leaves the window."""
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_30d")
+        doc = self._add_meta_edits(doc, *range(25, 251, 25))
+
+        edit_status = doc.get_meta_edit_status()
+        oldest = min(get_datetime(e.edited_on) for e in doc.meta_edits)
+        self.assertEqual(edit_status.color, "red")
+        self.assertEqual(edit_status.next_allowed, add_days(oldest, 30))
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_successful_meta_edit_recorded(self, mock_post):
+        """A successful edit at Meta adds a history row."""
+        mock_post.return_value = {"success": True}
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_ok", template="Order update", category="UTILITY")
+        doc.footer = "New footer"
+        doc.save(ignore_permissions=True)
+
+        doc.reload()
+        self.assertEqual(len(doc.meta_edits), 1)
+        self.assertEqual(doc.meta_edits[0].status, "APPROVED")
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_failed_meta_edit_not_recorded(self, mock_post):
+        """A failed edit at Meta adds no history row."""
+        mock_post.side_effect = Exception("400 Client Error")
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_fail", template="Order update", category="UTILITY")
+        doc.footer = "New footer"
+
+        self.assertRaises(Exception, doc.save, ignore_permissions=True)
+        self.assertTrue(mock_post.called)
+        doc.reload()
+        self.assertEqual(len(doc.meta_edits), 0)
+
+    @patch("frappe.model.document.Document.get_password", return_value="mock_token")
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request")
+    def test_fetch_keeps_meta_edit_history(self, mock_get, mock_get_password):
+        """Sync from Meta does not erase the edit history."""
+        doc = self._add_meta_edits(self._make_template_without_hooks(template_name="test_tmpl_fetch_history"), 1)
+        mock_get.return_value = {
+            "data": [
+                {
+                    "name": doc.actual_name,
+                    "status": "APPROVED",
+                    "language": "en",
+                    "category": "UTILITY",
+                    "id": doc.id,
+                    "components": [{"type": "BODY", "text": "Synced body"}],
+                }
+            ]
+        }
+
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import fetch
+        fetch()
+
+        doc.reload()
+        self.assertEqual(len(doc.meta_edits), 1)
+
+    def test_meta_last_updated_within_24_hours_shows_next_edit_time(self):
+        """Meta's last update in the last 24 hours shows the next edit time without our own history."""
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_meta_time")
+        doc.meta_last_updated_on = add_to_date(now_datetime(), hours=-2)
+
+        edit_status = doc.get_meta_edit_status()
+        self.assertEqual(edit_status.color, "orange")
+        self.assertEqual(edit_status.next_allowed, add_to_date(doc.meta_last_updated_on, hours=24))
+
+    @patch("frappe.model.document.Document.get_password", return_value="mock_token")
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request")
+    def test_fetch_stores_meta_last_updated(self, mock_get, mock_get_password):
+        """Sync from Meta asks for and stores Meta's last update time in system time."""
+        doc = self._make_template_without_hooks(template_name="test_tmpl_fetch_meta_time")
+        mock_get.return_value = {
+            "data": [
+                {
+                    "name": doc.actual_name,
+                    "status": "APPROVED",
+                    "language": "en",
+                    "category": "UTILITY",
+                    "id": doc.id,
+                    "last_updated_time": "2026-09-05T04:51:55+0000",
+                    "components": [{"type": "BODY", "text": "Synced body"}],
+                }
+            ]
+        }
+
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import fetch
+        fetch()
+
+        self.assertIn("last_updated_time", mock_get.call_args.kwargs["params"]["fields"])
+        doc.reload()
+        expected = convert_utc_to_system_timezone(get_datetime("2026-09-05 04:51:55")).replace(tzinfo=None)
+        self.assertEqual(get_datetime(doc.meta_last_updated_on), expected)
