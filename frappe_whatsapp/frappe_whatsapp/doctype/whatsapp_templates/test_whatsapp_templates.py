@@ -871,7 +871,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
     def test_successful_meta_edit_recorded(self, mock_post):
         """A successful edit at Meta adds a history row."""
         mock_post.return_value = {"success": True}
-        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_ok", category="UTILITY")
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_ok", template="Order update", category="UTILITY")
         doc.footer = "New footer"
         doc.save(ignore_permissions=True)
 
@@ -883,10 +883,11 @@ class TestWhatsAppTemplates(IntegrationTestCase):
     def test_failed_meta_edit_not_recorded(self, mock_post):
         """A failed edit at Meta adds no history row."""
         mock_post.side_effect = Exception("400 Client Error")
-        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_fail", category="UTILITY")
+        doc = self._make_template_without_hooks(template_name="test_tmpl_edit_fail", template="Order update", category="UTILITY")
         doc.footer = "New footer"
 
         self.assertRaises(Exception, doc.save, ignore_permissions=True)
+        self.assertTrue(mock_post.called)
         doc.reload()
         self.assertEqual(len(doc.meta_edits), 0)
 
