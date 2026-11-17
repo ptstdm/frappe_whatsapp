@@ -317,6 +317,11 @@ def update_template_status(data):
 		WHERE id = %(message_template_id)s""",
 		data
 	)
+	# Meta sends this after reviewing an edit, so also store Meta's last edit time.
+	for name in frappe.get_all("WhatsApp Templates", filters={"id": str(data.get("message_template_id"))}, pluck="name"):
+		doc = frappe.get_doc("WhatsApp Templates", name)
+		doc.sync_meta_last_updated()
+		doc.db_set("meta_last_updated_on", doc.meta_last_updated_on, update_modified=False)
 
 def _extract_failure_reason(status_info):
 	"""Build a compact failure reason from a Meta 'failed' status payload.
