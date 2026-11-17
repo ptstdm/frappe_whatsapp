@@ -50,5 +50,21 @@ frappe.ui.form.on('WhatsApp Templates', {
 		if (frm.is_new() || !edit_status) return;
 
 		frm.set_intro(edit_status.message, edit_status.color);
+	},
+
+	before_save: function(frm) {
+		// Warn before an edit Meta's limit may refuse; "Save Anyway" saves once without asking again.
+		if (frm.is_new() || frm.skip_meta_edit_warning) {
+			frm.skip_meta_edit_warning = false;
+			return;
+		}
+		return frm.call("get_meta_edit_warning").then((r) => {
+			if (!r.message) return;
+			frappe.validated = false;
+			frappe.warn(__("Meta Edit Limit"), r.message, () => {
+				frm.skip_meta_edit_warning = true;
+				frm.save();
+			}, __("Save Anyway"));
+		});
 	}
 });

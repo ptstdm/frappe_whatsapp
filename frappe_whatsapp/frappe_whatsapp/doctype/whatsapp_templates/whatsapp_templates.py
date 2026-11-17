@@ -69,7 +69,6 @@ class WhatsAppTemplates(Document):
 
         # On update, call Meta only when a Meta-stored field changed.
         if meta_changed:
-            self.sync_meta_last_updated()
             self.update_template()
 
     def validate_sample_values(self):
@@ -216,6 +215,16 @@ class WhatsAppTemplates(Document):
         if response and response.get("last_updated_time"):
             self.meta_last_updated_on = _meta_time_to_system(response["last_updated_time"])
 
+    @frappe.whitelist()
+    def get_meta_edit_warning(self):
+        """Read Meta's last update time and return a warning if this save may hit Meta's edit limit."""
+        self.load_doc_before_save()
+        if self._meta_fields_changed():
+            self.sync_meta_last_updated()
+            status = self.get_meta_edit_status()
+            if not status.can_edit:
+                return status.message
+
     def onload(self):
         self.set_onload("meta_edit_status", self.get_meta_edit_status())
 
@@ -223,7 +232,7 @@ class WhatsAppTemplates(Document):
         """Return Meta's edit-limit state for this template as a form note."""
         status = cstr(self.status).upper()
         if status in ("REJECTED", "PAUSED"):
-            return frappe._dict(color="blue", message=frappe._("This template can be edited any number of times."))
+            return frappe._dict(color="blue", can_edit=True, message=frappe._("This template can be edited any number of times."))
         if status != "APPROVED":
             return frappe._dict(
                 color="orange",
@@ -258,7 +267,7 @@ class WhatsAppTemplates(Document):
         # Edits before tracking started are unknown, so the count is shown only once history exists.
         if self.meta_edits:
             message += " " + frappe._("Edits used in the last 30 days: {0} of {1}.").format(len(edits), META_EDITS_PER_30_DAYS)
-        return frappe._dict(color="blue", message=message)
+        return frappe._dict(color="blue", can_edit=True, message=message)
 
     def set_whatsapp_account(self):
         """Set whatsapp account to default if missing"""
