@@ -13,6 +13,7 @@ from frappe_whatsapp.utils.webhook import (
     update_status,
     update_template_status,
 )
+from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import _meta_time_to_system
 
 
 def _run_status_inline(method=None, **kwargs):
@@ -163,10 +164,18 @@ class TestWebhookHelpers(IntegrationTestCase):
             "event": "APPROVED",
             "message_template_id": "webhook_tmpl_id_123",
         }
-        update_template_status(data)
+        with patch(
+            "frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request",
+            return_value={"last_updated_time": "2026-11-05T06:30:00+0000"},
+        ) as mock_get:
+            update_template_status(data)
 
         status = frappe.db.get_value("WhatsApp Templates", {"id": "webhook_tmpl_id_123"}, "status")
         self.assertEqual(status, "APPROVED")
+        # Meta's last edit time is read for this template and stored too.
+        self.assertIn("webhook_tmpl_id_123", mock_get.call_args.args[1])
+        stored = frappe.db.get_value("WhatsApp Templates", {"id": "webhook_tmpl_id_123"}, "meta_last_updated_on")
+        self.assertEqual(stored, _meta_time_to_system("2026-11-05T06:30:00+0000"))
 
 
 class TestWebhookEndpoint(IntegrationTestCase):
@@ -496,7 +505,8 @@ class TestWebhookEndpoint(IntegrationTestCase):
         }
         frappe.local.form_dict = frappe._dict(payload)
 
-        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request), \
+                patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request", return_value={}):
             from frappe_whatsapp.utils.webhook import webhook
             webhook()
 
