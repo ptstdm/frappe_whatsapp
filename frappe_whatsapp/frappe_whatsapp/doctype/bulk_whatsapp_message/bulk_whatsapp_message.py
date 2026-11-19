@@ -8,6 +8,8 @@ from frappe.utils import cint, get_datetime, now
 from frappe.model.document import Document
 from frappe.model.naming import make_autoname
 
+from frappe_whatsapp.utils import build_mpm_action
+
 # Add these files to your frappe_whatsapp app
 
 # 1. First, create a new DocType for Bulk WhatsApp Messaging
@@ -243,27 +245,12 @@ class BulkWhatsAppMessage(Document):
         }
 
     def get_mpm_action_json(self):
-        """Constructs the Meta 'action' JSON by fetching Catalog ID from the Account"""
+        """Constructs the Meta MPM 'action' JSON (shared builder with the single
+        send path so the shape can't diverge)."""
         if not self.whatsapp_account or not self.thumbnail_product_retailer_id or not self.product_ids:
             return None
 
-        raw_ids = self.product_ids
-        # Clean the product list from the user input
-        # Convert to a set to remove duplicates, then back to a list
-        product_list = list(dict.fromkeys([p.strip() for p in raw_ids.split(",") if p.strip()]))
-
-        if len(product_list) > 30:
-            product_list = product_list[:30]
+        if len({p.strip() for p in self.product_ids.split(",") if p.strip()}) > 30:
             frappe.msgprint(_("Note: Only the first 30 products were included due to WhatsApp limitations."),
                             indicator="orange")
-        return {
-            "thumbnail_product_retailer_id": self.thumbnail_product_retailer_id,
-            "sections": [
-                {
-                    "title": self.mpm_header or "Our Products",
-                    "product_items": [
-                        {"product_retailer_id": pid} for pid in product_list
-                    ]
-                }
-            ]
-        }
+        return build_mpm_action(self.thumbnail_product_retailer_id, self.product_ids, self.mpm_header)

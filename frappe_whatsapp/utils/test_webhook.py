@@ -379,6 +379,100 @@ class TestWebhookEndpoint(IntegrationTestCase):
         self.assertEqual(msg.content_type, "button")
         self.assertEqual(msg.message, "Yes, confirm")
 
+    def test_webhook_post_contacts_message(self):
+        """Shared contact cards arrive as type 'contacts' with a LIST payload.
+        The handler must not crash with "'list' object has no attribute 'get'"
+        and must record them as the singular 'contact' content_type. Regression
+        for the inbound-contacts webhook 500."""
+        mock_request = self._make_mock_request("POST")
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "metadata": {"phone_number_id": "webhook_ep_phone_id"},
+                        "contacts": [{"profile": {"name": "Sharer"}}],
+                        "messages": [{
+                            "from": "919900112295",
+                            "id": "wamid.webhook_ep_contacts_1",
+                            "type": "contacts",
+                            "contacts": [{
+                                "name": {"formatted_name": "John Doe"},
+                                "phones": [{"phone": "+91 90000 00000"}],
+                            }],
+                        }]
+                    }
+                }]
+            }]
+        }
+        frappe.local.form_dict = frappe._dict(payload)
+
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+            from frappe_whatsapp.utils.webhook import webhook
+            webhook()
+
+        msg = frappe.get_doc("WhatsApp Message", {"message_id": "wamid.webhook_ep_contacts_1"})
+        self.assertEqual(msg.content_type, "contact")
+        self.assertEqual(msg.message, "John Doe")
+
+    def test_webhook_post_location_message(self):
+        """Location messages store a readable body and content_type 'location'."""
+        mock_request = self._make_mock_request("POST")
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "metadata": {"phone_number_id": "webhook_ep_phone_id"},
+                        "contacts": [{"profile": {"name": "Pin Dropper"}}],
+                        "messages": [{
+                            "from": "919900112296",
+                            "id": "wamid.webhook_ep_location_1",
+                            "type": "location",
+                            "location": {"latitude": 19.07, "longitude": 72.87, "name": "Mumbai"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        frappe.local.form_dict = frappe._dict(payload)
+
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+            from frappe_whatsapp.utils.webhook import webhook
+            webhook()
+
+        msg = frappe.get_doc("WhatsApp Message", {"message_id": "wamid.webhook_ep_location_1"})
+        self.assertEqual(msg.content_type, "location")
+        self.assertEqual(msg.message, "Mumbai")
+
+    def test_webhook_post_unknown_type_message(self):
+        """An inbound type we don't model (e.g. sticker) must not crash and is
+        recorded as content_type 'unsupported' with the raw payload as body."""
+        mock_request = self._make_mock_request("POST")
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "metadata": {"phone_number_id": "webhook_ep_phone_id"},
+                        "contacts": [{"profile": {"name": "Sticker Fan"}}],
+                        "messages": [{
+                            "from": "919900112297",
+                            "id": "wamid.webhook_ep_sticker_1",
+                            "type": "sticker",
+                            "sticker": {"id": "123", "mime_type": "image/webp"},
+                        }]
+                    }
+                }]
+            }]
+        }
+        frappe.local.form_dict = frappe._dict(payload)
+
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+            from frappe_whatsapp.utils.webhook import webhook
+            webhook()
+
+        msg = frappe.get_doc("WhatsApp Message", {"message_id": "wamid.webhook_ep_sticker_1"})
+        self.assertEqual(msg.content_type, "unsupported")
+        self.assertIn("image/webp", msg.message)
+
     def test_webhook_post_reply_message(self):
         """Test POST webhook with reply context."""
         mock_request = self._make_mock_request("POST")

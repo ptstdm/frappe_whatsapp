@@ -34,7 +34,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
                 "is_default_outgoing": 1,
             })
             account.insert(ignore_permissions=True)
-            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+            frappe.db.commit()  
 
     @classmethod
     def _ensure_second_test_account(cls):
@@ -52,7 +52,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
                 "webhook_verify_token": "tmpl_test_verify_token_2",
             })
             account.insert(ignore_permissions=True)
-            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+            frappe.db.commit()  
 
     def setUp(self):
         # Set password within each test's transaction scope
@@ -99,7 +99,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             "sample_values": kwargs.get("sample_values", ""),
         })
         doc.db_insert()
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        frappe.db.commit()  
         return frappe.get_doc("WhatsApp Templates", doc.name)
 
     def test_template_autoname(self):
@@ -555,9 +555,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         self.assertTrue(mock_post.called)
         self.assertEqual(doc.sample_values, "a,b,c")
 
-    # ------------------------------------------------------------------
-    # SRO-2026-10-00227 — media header (DOCUMENT/IMAGE) crash
-    # ------------------------------------------------------------------
+ 
     @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
     def test_media_header_without_sample_blocks(self, mock_post):
         """DOCUMENT header without a sample -> clear message, no crash, nothing sent."""
@@ -630,9 +628,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             m_media.assert_called_once()
         self.assertEqual(doc.header_media_handle, "H_NEW")
 
-    # ------------------------------------------------------------------
-    # SRO-2026-10-00228 — call Meta only on real changes + surface the error
-    # ------------------------------------------------------------------
+
     @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
     def test_no_meta_call_on_internal_field_change(self, mock_post):
         """Editing only an internal field (for_doctype) sends nothing to Meta."""
@@ -698,9 +694,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             doc.save(ignore_permissions=True)
         self.assertIn("Could not reach Meta", str(cm.exception))
 
-    # ------------------------------------------------------------------
-    # Copilot review follow-ups (buttons comparison, upload gating, blank sample)
-    # ------------------------------------------------------------------
+  
     @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
     def test_no_meta_call_on_internal_change_with_buttons(self, mock_post):
         """A template WITH buttons: an internal-only edit still sends nothing to Meta.
@@ -788,3 +782,283 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         )
         doc.validate_sample_values()
         self.assertEqual(doc.sample_values, "")
+
+
+    def _ensure_test_flow(self):
+        """A published WhatsApp Flow fixture with a flow_id (for Flow buttons)."""
+        name = "test_tmpl_flow_fixture"
+        if not frappe.db.exists("WhatsApp Flow", name):
+            flow = frappe.get_doc({
+                "doctype": "WhatsApp Flow",
+                "flow_name": name,
+                "whatsapp_account": "Test WA Tmpl Account",
+                "category": "OTHER",
+                "status": "Published",
+                "flow_id": "flow_id_test_123",
+            })
+            flow.name = name
+            flow.db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        return name
+
+    def _sent_buttons(self, mock_post):
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        for c in data["components"]:
+            if c["type"] == "BUTTONS":
+                return c["buttons"]
+        return []
+
+    # --- case 1: template name ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_template_name_with_hyphen_blocks(self, mock_post):
+        """A label with a hyphen can't make a valid Meta name -> blocked."""
+        doc = self._new_template_doc(
+            template_name="test_tmpl_bad-name", template="Order update", sample_values="",
+        )
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_template_name_trailing_space_stripped(self, mock_post):
+        """A trailing space yields a clean actual_name (not `..._`)."""
+        mock_post.return_value = {"id": "nm1", "status": "PENDING"}
+        doc = self._new_template_doc(
+            template_name="test_tmpl_trail ", template="Order update", sample_values="",
+        )
+        doc.insert(ignore_permissions=True)
+        self.assertEqual(doc.actual_name, "test_tmpl_trail")
+
+    # --- cases 2-4: buttons ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_call_phone_without_number_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_cp", template="Order update")
+        doc.append("buttons", {"button_type": "Call Phone", "button_label": "Call"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_visit_website_without_url_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_vw", template="Order update")
+        doc.append("buttons", {"button_type": "Visit Website", "button_label": "Open", "url_type": "Static"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_dynamic_url_without_variable_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_dynv", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Visit Website", "button_label": "Open",
+            "url_type": "Dynamic", "website_url": "https://x.com/view", "example_url": "https://x.com/view/1",
+        })
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_dynamic_url_without_example_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_dyne", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Visit Website", "button_label": "Open",
+            "url_type": "Dynamic", "website_url": "https://x.com/{{1}}",
+        })
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    # --- case 5: header TEXT with a variable ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_text_header_with_variable_needs_sample_blocks(self, mock_post):
+        doc = self._new_template_doc(
+            template_name="test_tmpl_hdrvar", template="Order update",
+            header_type="TEXT", header="Hi {{1}}",
+        )
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    # --- case 6: Flow/MPM/Catalog rules ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_button_without_flow_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_flow0", template="Order update")
+        doc.append("buttons", {"button_type": "Flow", "button_label": "Open"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_two_mpm_buttons_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_2mpm", template="Order update")
+        doc.append("buttons", {"button_type": "Multi-Product Message", "button_label": "A"})
+        doc.append("buttons", {"button_type": "Multi-Product Message", "button_label": "B"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_and_catalog_mix_blocks(self, mock_post):
+        flow = self._ensure_test_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_mix", template="Order update")
+        doc.append("buttons", {"button_type": "Flow", "button_label": "Open", "flow": flow})
+        doc.append("buttons", {"button_type": "Catalog", "button_label": "Shop"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    # --- Flow / Catalog create payloads (verified shapes) ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_button_create_payload(self, mock_post):
+        mock_post.return_value = {"id": "fl1", "status": "PENDING"}
+        flow = self._ensure_test_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_flowok", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Flow", "button_label": "Open form",
+            "flow": flow, "navigate_screen": "WELCOME",
+        })
+        doc.insert(ignore_permissions=True)
+        btn = self._sent_buttons(mock_post)[0]
+        self.assertEqual(btn["type"], "FLOW")
+        self.assertEqual(btn["flow_id"], "flow_id_test_123")
+        self.assertEqual(btn["flow_action"], "navigate")
+        self.assertEqual(btn["navigate_screen"], "WELCOME")
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_catalog_button_create_payload(self, mock_post):
+        mock_post.return_value = {"id": "ct1", "status": "PENDING"}
+        doc = self._new_template_doc(template_name="test_tmpl_catok", template="Order update")
+        doc.append("buttons", {"button_type": "Catalog", "button_label": "View catalog"})
+        doc.insert(ignore_permissions=True)
+        btn = self._sent_buttons(mock_post)[0]
+        self.assertEqual(btn, {"type": "CATALOG", "text": "View catalog"})
+
+    # --- Copilot review follow-ups (findings 1-4) ---
+    def _ensure_draft_flow(self):
+        """A WhatsApp Flow fixture that has a flow_id but is still Draft."""
+        name = "test_tmpl_draft_flow_fixture"
+        if not frappe.db.exists("WhatsApp Flow", name):
+            flow = frappe.get_doc({
+                "doctype": "WhatsApp Flow",
+                "flow_name": name,
+                "whatsapp_account": "Test WA Tmpl Account",
+                "category": "OTHER",
+                "status": "Draft",
+                "flow_id": "draft_flow_id_1",
+            })
+            flow.name = name
+            flow.db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- fixture visible to later queries
+        return name
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_draft_flow_with_id_blocks(self, mock_post):
+        """Finding 3: a Flow with a flow_id but status != Published is rejected
+        (create_on_whatsapp assigns an id before publication); Meta not called."""
+        flow = self._ensure_draft_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_draftflow", template="Order update")
+        doc.append("buttons", {"button_type": "Flow", "button_label": "Open", "flow": flow})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_data_exchange_omits_navigate_screen(self, mock_post):
+        """Finding 4: flow_action=data_exchange must NOT emit navigate_screen
+        (Meta only allows it with the navigate action)."""
+        mock_post.return_value = {"id": "fldx", "status": "PENDING"}
+        flow = self._ensure_test_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_flowdx", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Flow", "button_label": "Open form",
+            "flow": flow, "flow_action": "data_exchange", "navigate_screen": "WELCOME",
+        })
+        doc.insert(ignore_permissions=True)
+        btn = self._sent_buttons(mock_post)[0]
+        self.assertEqual(btn["flow_action"], "data_exchange")
+        self.assertNotIn("navigate_screen", btn)
+
+    @patch("frappe.model.document.Document.get_password", return_value="mock_token")
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request")
+    def test_fetch_resolves_flow_link_and_keeps_navigation(self, mock_request, mock_get_password):
+        """Finding 1: fetch() must map Meta's flow_id back to the local WhatsApp Flow
+        and keep flow_action / navigate_screen, not clear the Flow link."""
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import fetch
+        flow = self._ensure_test_flow()  # Published, flow_id flow_id_test_123
+        tmpl = {
+            "name": "test_tmpl_fetchflow", "status": "APPROVED", "language": "en",
+            "category": "UTILITY", "id": "fetched_flow_tmpl_id",
+            "components": [
+                {"type": "BODY", "text": "Hi {{1}}"},
+                {"type": "BUTTONS", "buttons": [{
+                    "type": "FLOW", "text": "Open form", "flow_id": "flow_id_test_123",
+                    "flow_action": "NAVIGATE", "navigate_screen": "WELCOME",
+                }]},
+            ],
+        }
+        self._serve_meta_pages(mock_request, {
+            self._templates_url("Test WA Tmpl Account"): {"data": [tmpl]},
+        })
+        fetch()
+        name = frappe.db.get_value("WhatsApp Templates", {"actual_name": "test_tmpl_fetchflow"}, "name")
+        self.assertTrue(name)
+        rows = frappe.get_all(
+            "WhatsApp Button", filters={"parent": name},
+            fields=["button_type", "flow", "flow_action", "navigate_screen"],
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].button_type, "Flow")
+        self.assertEqual(rows[0].flow, flow)
+        self.assertEqual(rows[0].flow_action, "navigate")  # Meta's NAVIGATE lowercased
+        self.assertEqual(rows[0].navigate_screen, "WELCOME")
+
+    @patch("frappe.model.document.Document.get_password", return_value="mock_token")
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request")
+    def test_fetch_imports_text_header_example(self, mock_request, mock_get_password):
+        """Finding 2: a fetched TEXT header with a {{n}} must import its example into
+        `sample`, else the template fails validate_header on every later save."""
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import fetch
+        tmpl = {
+            "name": "test_tmpl_fetchhdr", "status": "APPROVED", "language": "en",
+            "category": "UTILITY", "id": "fetched_hdr_tmpl_id",
+            "components": [
+                {"type": "HEADER", "format": "TEXT", "text": "Hi {{1}}",
+                 "example": {"header_text": ["Ravi"]}},
+                {"type": "BODY", "text": "Your order is ready"},
+            ],
+        }
+        self._serve_meta_pages(mock_request, {
+            self._templates_url("Test WA Tmpl Account"): {"data": [tmpl]},
+        })
+        fetch()
+        name = frappe.db.get_value("WhatsApp Templates", {"actual_name": "test_tmpl_fetchhdr"}, "name")
+        self.assertEqual(frappe.db.get_value("WhatsApp Templates", name, "sample"), "Ravi")
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_unchanged_text_header_without_sample_not_blocked(self, mock_post):
+        """Finding 2: an older imported template whose TEXT header has a {{n}} but no
+        sample must stay editable (footer-only change) without being blocked."""
+        mock_post.return_value = {"id": "oldhdr", "status": "PENDING"}
+        doc = self._make_template_without_hooks(
+            template_name="test_tmpl_oldhdr", template="Your order is ready",
+            category="MARKETING", header_type="TEXT", header="Hi {{1}}",
+        )
+        doc.footer = "New footer"
+        doc.save(ignore_permissions=True)  # header unchanged -> validate_header must not block
+        self.assertEqual(doc.footer, "New footer")
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_clearing_sample_on_variable_text_header_blocks(self, mock_post):
+        """Finding B: removing the Sample from an existing variable TEXT header is
+        rejected before the Meta call. sample is a Meta-stored field, so clearing it
+        still triggers update_template() and would send an example-less header."""
+        doc = self._make_template_without_hooks(
+            template_name="test_tmpl_clrhdr", template="Your order is ready",
+            category="MARKETING", header_type="TEXT", header="Hi {{1}}",
+        )
+        frappe.db.set_value("WhatsApp Templates", doc.name, "sample", "Ravi")
+        doc.reload()
+        doc.sample = ""
+        with self.assertRaises(frappe.ValidationError):
+            doc.save(ignore_permissions=True)
+        mock_post.assert_not_called()

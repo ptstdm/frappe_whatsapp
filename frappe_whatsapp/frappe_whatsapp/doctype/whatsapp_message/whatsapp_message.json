@@ -20,6 +20,9 @@
   "template_parameters",
   "template_header_parameters",
   "product_catalog_json",
+  "thumbnail_product_retailer_id",
+  "product_ids",
+  "mpm_header",
   "column_break_5",
   "message",
   "message_type",
@@ -293,6 +296,23 @@
    "fieldtype": "JSON",
    "label": "Product Catalog",
    "set_only_once": 1
+  },
+  {
+   "fieldname": "thumbnail_product_retailer_id",
+   "fieldtype": "Data",
+   "label": "Thumbnail Product Retailer ID",
+   "description": "Catalog product shown as the thumbnail (MPM / Catalog send)."
+  },
+  {
+   "fieldname": "product_ids",
+   "fieldtype": "Small Text",
+   "label": "Product Retailer IDs",
+   "description": "Comma-separated catalog retailer IDs for a Multi-Product Message."
+  },
+  {
+   "fieldname": "mpm_header",
+   "fieldtype": "Data",
+   "label": "Product Section Title"
   },
   {
    "fieldname": "template_button_parameters",

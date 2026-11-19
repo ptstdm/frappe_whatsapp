@@ -12,10 +12,7 @@ from frappe.utils.background_jobs import get_queues_timeout
 
 from frappe_whatsapp.utils import get_whatsapp_account
 
-# A WhatsApp status UPDATE can hit a transient 1020/1213 under innodb_snapshot_isolation when concurrent
-# Meta callbacks (sent/delivered/read) + the chat "mark as read" race the same row. Retry through it — the
-# write is last-writer-wins + idempotent (re-delivered callbacks re-apply), and each retry's rollback gives
-# a fresh snapshot so it converges.
+
 _STATUS_RETRY_ATTEMPTS = 5
 _STATUS_RETRY_BASE_S = 0.05
 
@@ -73,12 +70,6 @@ def post():
 
 	whatsapp_account = get_whatsapp_account(phone_id) if phone_id else None
 
-	# Only `messages` events carry `metadata.phone_number_id`. Status-change
-	# events (`message_template_status_update`, message status callbacks) have
-	# no metadata, so `phone_id` is None and `whatsapp_account` is also None
-	# for them by design. Gating the entire handler on `whatsapp_account`
-	# silently drops every template-status update; gate only the message-
-	# ingestion branch instead.
 	if messages and not whatsapp_account:
 		return
 
@@ -177,8 +168,8 @@ def post():
 						"whatsapp_account": whatsapp_account.name
 					}).insert(ignore_permissions=True)
 
-					# Publish realtime event for flow response
-					frappe.publish_realtime(  # nosemgrep: frappe-realtime-pick-room -- intentional site-wide fan-out for chat UIs (whatsapp_chat companion app) listening for inbound flow responses
+			
+					frappe.publish_realtime( 
 						"whatsapp_flow_response",
 						{
 							"phone": message['from'],
@@ -280,16 +271,59 @@ def post():
 					"content_type": message_type,
 					"profile_name": sender_profile_name
 				}).insert(ignore_permissions=True)
-			else:
+			elif message_type == "contacts":
+				contacts = message.get("contacts") or []
+				summary = "; ".join(
+					(c.get("name", {}) or {}).get("formatted_name", "")
+					for c in contacts if isinstance(c, dict)
+				).strip("; ") or _("Shared contact")
 				frappe.get_doc({
 					"doctype": "WhatsApp Message",
 					"type": "Incoming",
 					"from": message['from'],
 					"message_id": message['id'],
-					"message": message[message_type].get(message_type),
-					"content_type" : message_type,
-					"profile_name":sender_profile_name,
-					"whatsapp_account":whatsapp_account.name
+					"reply_to_message_id": reply_to_message_id,
+					"is_reply": is_reply,
+					"message": summary,
+					"content_type": "contact",
+					"profile_name": sender_profile_name,
+					"whatsapp_account": whatsapp_account.name
+				}).insert(ignore_permissions=True)
+			elif message_type == "location":
+				loc = message.get("location") or {}
+				body = loc.get("name") or loc.get("address") or \
+					f"{loc.get('latitude', '')},{loc.get('longitude', '')}"
+				frappe.get_doc({
+					"doctype": "WhatsApp Message",
+					"type": "Incoming",
+					"from": message['from'],
+					"message_id": message['id'],
+					"reply_to_message_id": reply_to_message_id,
+					"is_reply": is_reply,
+					"message": body,
+					"content_type": "location",
+					"profile_name": sender_profile_name,
+					"whatsapp_account": whatsapp_account.name
+				}).insert(ignore_permissions=True)
+			else:
+				payload = message.get(message_type)
+				if isinstance(payload, dict):
+					body = payload.get("caption") or payload.get("body") or json.dumps(payload)
+				elif payload is None:
+					body = ""
+				else:
+					body = json.dumps(payload)
+				frappe.get_doc({
+					"doctype": "WhatsApp Message",
+					"type": "Incoming",
+					"from": message['from'],
+					"message_id": message['id'],
+					"reply_to_message_id": reply_to_message_id,
+					"is_reply": is_reply,
+					"message": body,
+					"content_type": "unsupported",
+					"profile_name": sender_profile_name,
+					"whatsapp_account": whatsapp_account.name
 				}).insert(ignore_permissions=True)
 
 	else:

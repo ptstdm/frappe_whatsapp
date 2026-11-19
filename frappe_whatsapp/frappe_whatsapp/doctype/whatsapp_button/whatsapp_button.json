@@ -11,7 +11,10 @@
   "phone_number",
   "website_url",
   "example_url",
-  "url_type"
+  "url_type",
+  "flow",
+  "flow_action",
+  "navigate_screen"
  ],
  "fields": [
   {
@@ -53,6 +56,29 @@
    "fieldname": "example_url",
    "fieldtype": "Data",
    "label": "Example URL"
+  },
+  {
+   "depends_on": "eval:doc.button_type == \"Flow\"",
+   "fieldname": "flow",
+   "fieldtype": "Link",
+   "label": "WhatsApp Flow",
+   "options": "WhatsApp Flow",
+   "mandatory_depends_on": "eval:doc.button_type == \"Flow\""
+  },
+  {
+   "default": "navigate",
+   "depends_on": "eval:doc.button_type == \"Flow\"",
+   "fieldname": "flow_action",
+   "fieldtype": "Select",
+   "label": "Flow Action",
+   "options": "navigate\ndata_exchange"
+  },
+  {
+   "depends_on": "eval:doc.button_type == \"Flow\" && doc.flow_action != \"data_exchange\"",
+   "fieldname": "navigate_screen",
+   "fieldtype": "Data",
+   "label": "Navigate Screen",
+   "description": "Screen id to open. Defaults to the flow's first screen."
   }
  ],
  "index_web_pages_for_search": 1,

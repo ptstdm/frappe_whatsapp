@@ -37,6 +37,9 @@ class WhatsAppTemplates(Document):
         self.set_whatsapp_account()
         self.validate_sample_values()
         self.validate_media_header()
+        self.validate_header()
+        self.validate_template_name()
+        self.validate_buttons()
 
         if not self.language_code or self.has_value_changed("language"):
             lang_code = frappe.db.get_value("Language", self.language) or "en"
@@ -64,7 +67,7 @@ class WhatsAppTemplates(Document):
         Meta builds the BODY example from a comma-separated ``sample_values`` list
         that must match the ``{{n}}`` placeholders in the body. Values on separate
         lines, a comma inside a value, or a count mismatch were previously sent as-is
-        and rejected by Meta with an opaque error (SRO-2026-08-00159).
+        and rejected by Meta with an opaque error 
         """
         body = self.template or ""
         distinct = sorted({int(x) for x in re.findall(r"\{\{\s*(\d+)\s*\}\}", body)})
@@ -118,7 +121,7 @@ class WhatsAppTemplates(Document):
 
         Meta reviews that sample and it yields the media handle used to build the
         header component. Without it ``get_header()`` raised
-        ``AttributeError: ... '_media_id'`` (SRO-2026-10-00227); show a clear,
+        ``AttributeError: ... '_media_id'``; show a clear,
         fixable message instead.
         """
         if self.header_type in ["IMAGE", "DOCUMENT"] and not self.sample:
@@ -127,6 +130,148 @@ class WhatsAppTemplates(Document):
                     self.header_type
                 )
             )
+
+    def validate_header(self):
+        """A TEXT header containing a variable needs a Sample value for Meta.
+
+        Only enforce on create or when the header actually changes. An older
+        template imported before fetch() persisted the header example may have a
+        {{n}} header with no sample; we must not block an unrelated edit (e.g.
+        footer-only) to it. A new/changed header still requires the sample.
+        """
+        if not (
+            self.is_new()
+            or self.has_value_changed("header")
+            or self.has_value_changed("header_type")
+            # sample is a Meta-stored field: clearing it still triggers
+            # update_template(), which would send the header without its required
+            # example, so reject its removal here too (legacy unchanged headers pass).
+            or self.has_value_changed("sample")
+        ):
+            return
+        if (
+            self.header_type == "TEXT"
+            and self.header
+            and re.search(r"\{\{\s*\d+\s*\}\}", self.header)
+            and not self.sample
+        ):
+            frappe.throw(
+                _("The Header text contains a variable, so a Sample value is required for Meta review.")
+            )
+
+    def validate_template_name(self):
+        """Compute + validate the Meta template name (new docs only).
+
+        Meta names are immutable after create and allow only lowercase letters,
+        digits and underscore. Derive ``actual_name`` once, here, from the label
+        so a value with spaces/caps/hyphens/trailing-space can't silently produce
+        a broken name like ``order_ready_-_alert`` or ``testing_``
+        """
+        if not self.is_new():
+            return
+        actual = (self.template_name or "").strip().lower().replace(" ", "_")
+        if not actual or not re.fullmatch(r"[a-z0-9_]+", actual):
+            frappe.throw(
+                _(
+                    "Template Label can use only letters, numbers and spaces so the Meta name is "
+                    "valid. Remove any other characters (e.g. hyphens or punctuation). Got: {0}"
+                ).format(self.template_name or "")
+            )
+        self.actual_name = actual
+
+    def validate_buttons(self):
+        """Validate each button before it reaches Meta 
+
+        Catches the Call Phone / Visit Website / Dynamic URL gaps, requires a
+        created Flow for a Flow button, and enforces Meta's special-button rules
+        (at most one Flow/MPM/Catalog, and Flow cannot coexist with Catalog).
+        """
+        specials = []
+        for i, btn in enumerate(self.buttons or [], 1):
+            bt = btn.button_type
+            if bt == "Call Phone" and not btn.phone_number:
+                frappe.throw(_("Button {0} (Call Phone): Phone Number is required.").format(i))
+            elif bt == "Visit Website":
+                if not btn.website_url:
+                    frappe.throw(_("Button {0} (Visit Website): Website URL is required.").format(i))
+                if btn.url_type == "Dynamic":
+                    if not re.search(r"\{\{\s*\d+\s*\}\}", btn.website_url or ""):
+                        frappe.throw(
+                            _("Button {0} (Visit Website, Dynamic): the URL must contain a numbered variable placeholder.").format(i)
+                        )
+                    if not btn.example_url:
+                        frappe.throw(
+                            _("Button {0} (Visit Website, Dynamic): an Example URL is required.").format(i)
+                        )
+            elif bt == "Flow":
+                if not btn.flow:
+                    frappe.throw(_("Button {0} (Flow): select a WhatsApp Flow.").format(i))
+                else:
+                    flow = frappe.db.get_value(
+                        "WhatsApp Flow", btn.flow, ["flow_id", "status"], as_dict=True
+                    )
+                    # create_on_whatsapp() assigns flow_id before publication and
+                    # deprecated Flows keep theirs, so a non-empty id is not enough:
+                    # Meta only attaches a *Published* Flow to a template button.
+                    if not flow or not flow.flow_id:
+                        frappe.throw(
+                            _("Button {0} (Flow): the selected Flow has not been created on Meta yet (no flow id).").format(i)
+                        )
+                    if flow.status != "Published":
+                        frappe.throw(
+                            _("Button {0} (Flow): select a published WhatsApp Flow (current status: {1}).").format(
+                                i, flow.status or _("Draft")
+                            )
+                        )
+                specials.append("Flow")
+            elif bt == "Multi-Product Message":
+                specials.append("MPM")
+            elif bt == "Catalog":
+                specials.append("Catalog")
+
+        for kind in ("Flow", "MPM", "Catalog"):
+            if specials.count(kind) > 1:
+                frappe.throw(_("A template can have only one {0} button.").format(kind))
+        if "Flow" in specials and "Catalog" in specials:
+            frappe.throw(_("A template cannot have both a Flow and a Catalog button."))
+
+    def _build_buttons_component(self):
+        """Build the Meta BUTTONS component (shared by create + update).
+
+        Verified against live Meta pulls: URL / PHONE_NUMBER / QUICK_REPLY / MPM /
+        CATALOG carry just type (+ text/url/phone), while FLOW carries
+        ``flow_id`` + ``flow_action`` + ``navigate_screen``.
+        """
+        buttons = []
+        for btn in self.buttons:
+            b = {"type": btn.button_type, "text": btn.button_label}
+            if btn.button_type == "Visit Website":
+                b["type"] = "URL"
+                b["url"] = btn.website_url
+                if btn.url_type == "Dynamic" and btn.example_url:
+                    b["example"] = btn.example_url.split(",")
+            elif btn.button_type == "Call Phone":
+                b["type"] = "PHONE_NUMBER"
+                b["phone_number"] = btn.phone_number
+            elif btn.button_type == "Quick Reply":
+                b["type"] = "QUICK_REPLY"
+            elif btn.button_type == "Multi-Product Message":
+                b["type"] = "MPM"
+            elif btn.button_type == "Catalog":
+                b["type"] = "CATALOG"
+            elif btn.button_type == "Flow":
+                flow = frappe.get_doc("WhatsApp Flow", btn.flow)
+                b["type"] = "FLOW"
+                b["flow_id"] = flow.flow_id
+                b["flow_action"] = btn.flow_action or "navigate"
+                # Meta only permits navigate_screen with the navigate action; for
+                # data_exchange it must be omitted or the create/update is rejected.
+                if b["flow_action"] == "navigate":
+                    screen = btn.navigate_screen or (flow.screens[0].screen_id if flow.screens else None)
+                    if screen:
+                        b["navigate_screen"] = screen
+            buttons.append(b)
+        return {"type": "BUTTONS", "buttons": buttons}
 
     @staticmethod
     def _button_signature(buttons):
@@ -145,6 +290,9 @@ class WhatsAppTemplates(Document):
                 b.website_url,
                 b.example_url,
                 b.phone_number,
+                b.get("flow"),
+                b.get("flow_action"),
+                b.get("navigate_screen"),
             )
             for b in (buttons or [])
         ]
@@ -155,7 +303,6 @@ class WhatsAppTemplates(Document):
         Scalar fields use ``has_value_changed``; the ``buttons`` child table is
         compared by value so a no-op or internal-only save of a template that has
         buttons does not trigger a needless Meta edit + re-review
-        (SRO-2026-10-00228).
         """
         if any(self.has_value_changed(f) for f in META_STORED_FIELDS if f != "buttons"):
             return True
@@ -170,7 +317,6 @@ class WhatsAppTemplates(Document):
         can read Meta's ``error_user_*``); a connection/timeout raises before the
         flag is set, so report that as an unreachable-Meta message rather than
         crashing with ``'NoneType' object has no attribute 'json'``
-        (SRO-2026-10-00228).
         """
         if isinstance(exc, HTTPError) and frappe.flags.integration_request is not None:
             try:
@@ -284,11 +430,9 @@ class WhatsAppTemplates(Document):
         return frappe.get_doc("File", {"file_url": file_url}).get_content()
 
 
-    def after_insert(self):  # nosemgrep: frappe-modifying-but-not-committing -- self.actual_name/id/status are persisted via self.db_update() after the Meta round-trip; the static check can't trace through the API call
-        # actual_name / id / status are persisted via self.db_update() below
-        # after the Meta round-trip; the static check can't trace that call.
-        if self.template_name:
-            self.actual_name = self.template_name.lower().replace(" ", "_")  # nosemgrep: frappe-modifying-but-not-committing
+    def after_insert(self):  
+        if not self.actual_name and self.template_name:
+            self.actual_name = self.template_name.strip().lower().replace(" ", "_")  # nosemgrep: frappe-modifying-but-not-committing
 
         self.get_settings()
         data = {
@@ -315,28 +459,7 @@ class WhatsAppTemplates(Document):
 
         # add buttons
         if self.buttons:
-            button_block = {"type": "BUTTONS", "buttons": []}
-            for btn in self.buttons:
-                b = {"type": btn.button_type, "text": btn.button_label}
-
-                if btn.button_type == "Visit Website":
-                    b["type"] = "URL"
-                    b["url"] = btn.website_url
-                    if btn.url_type == "Dynamic" and btn.example_url:
-                        b["example"] = btn.example_url.split(",")
-                elif btn.button_type == "Call Phone":
-                    b["type"] = "PHONE_NUMBER"
-                    b["phone_number"] = btn.phone_number
-                elif btn.button_type == "Quick Reply":
-                    b["type"] = "QUICK_REPLY"
-                elif btn.button_type == "Multi-Product Message":
-                    b["type"] = "MPM"
-                elif btn.button_type == "Catalog":
-                    b["type"] = "CATALOG"
-
-                button_block["buttons"].append(b)
-
-            data["components"].append(button_block)
+            data["components"].append(self._build_buttons_component())
 
         try:
             response = make_post_request(
@@ -367,29 +490,7 @@ class WhatsAppTemplates(Document):
         if self.footer:
             data["components"].append({"type": "FOOTER", "text": self.footer})
         if self.buttons:
-            button_block = {"type": "BUTTONS", "buttons": []}
-            for btn in self.buttons:
-                b = {"type": btn.button_type, "text": btn.button_label}
-
-                if btn.button_type == "Visit Website":
-                    b["type"] = "URL"
-                    b["url"] = btn.website_url
-                    if btn.url_type == "Dynamic" and btn.example_url:
-                        b["example"] = btn.example_url.split(",")
-                elif btn.button_type == "Call Phone":
-                    b["type"] = "PHONE_NUMBER"
-                    b["phone_number"] = btn.phone_number
-                elif btn.button_type == "Quick Reply":
-                    b["type"] = "QUICK_REPLY"
-                elif btn.button_type == "Multi-Product Message":
-                    b["type"] = "MPM"
-                    # MPM buttons often require additional fields like catalog_id
-                elif btn.button_type == "Catalog":
-                    b["type"] = "CATALOG"
-
-                button_block["buttons"].append(b)
-
-            data["components"].append(button_block)
+            data["components"].append(self._build_buttons_component())
 
         try:
             # post template to meta for update
@@ -496,6 +597,13 @@ def fetch():
                         # if format is text update sample text
                         if component["format"] == "TEXT":
                             doc.header = component["text"]
+                            # Persist the header variable example too, else a fetched
+                            # template whose TEXT header has a {{n}} lands with no sample
+                            # and fails validate_header() on every later save. get_header()
+                            # stores it as a ", "-joined string in `sample`.
+                            header_example = (component.get("example") or {}).get("header_text")
+                            if header_example:
+                                doc.sample = ", ".join(header_example)
                     # Update footer text
                     elif component["type"] == "FOOTER":
                         doc.footer = component["text"]
@@ -546,7 +654,18 @@ def fetch():
                             elif button["type"] == "PHONE_NUMBER":
                                 btn["phone_number"] = button.get("phone_number")
                             elif button["type"] == "FLOW":
-                                btn["flow"] = button.get("flow")
+                                flow_id = button.get("flow_id")
+                                if flow_id:
+                                    local_flow = frappe.db.get_value(
+                                        "WhatsApp Flow", {"flow_id": str(flow_id)}, "name"
+                                    )
+                                    if local_flow:
+                                        btn["flow"] = local_flow
+                                if button.get("flow_action"):
+                                    # Meta uppercases it (NAVIGATE); our Select is lowercase.
+                                    btn["flow_action"] = button["flow_action"].lower()
+                                if button.get("navigate_screen"):
+                                    btn["navigate_screen"] = button["navigate_screen"]
 
                             doc.append("buttons", btn)
 
