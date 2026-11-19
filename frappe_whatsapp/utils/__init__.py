@@ -193,3 +193,25 @@ def format_number(number):
         number = number[1 : len(number)]
 
     return number
+
+
+def build_mpm_action(thumbnail_product_retailer_id, product_ids, header=None):
+    """Build the Meta Multi-Product Message send 'action' JSON.
+
+    Shared by Bulk WhatsApp Message and the single-message send path so the
+    action can't diverge. ``product_ids`` is a comma-separated list of catalog
+    retailer IDs; duplicates are dropped and Meta's 30-product cap is applied.
+    Returns ``None`` when there is nothing to send.
+    """
+    ids = list(dict.fromkeys([p.strip() for p in (product_ids or "").split(",") if p.strip()]))[:30]
+    if not thumbnail_product_retailer_id or not ids:
+        return None
+    return {
+        "thumbnail_product_retailer_id": thumbnail_product_retailer_id,
+        "sections": [
+            {
+                "title": header or "Our Products",
+                "product_items": [{"product_retailer_id": pid} for pid in ids],
+            }
+        ],
+    }

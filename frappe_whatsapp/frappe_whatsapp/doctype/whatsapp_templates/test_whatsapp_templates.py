@@ -788,3 +788,155 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         )
         doc.validate_sample_values()
         self.assertEqual(doc.sample_values, "")
+
+    # ------------------------------------------------------------------
+    # SRO-2026-10-00230 — validate name / header / buttons + Flow/MPM/Catalog
+    # ------------------------------------------------------------------
+    def _ensure_test_flow(self):
+        """A published WhatsApp Flow fixture with a flow_id (for Flow buttons)."""
+        name = "test_tmpl_flow_fixture"
+        if not frappe.db.exists("WhatsApp Flow", name):
+            flow = frappe.get_doc({
+                "doctype": "WhatsApp Flow",
+                "flow_name": name,
+                "whatsapp_account": "Test WA Tmpl Account",
+                "category": "OTHER",
+                "status": "Published",
+                "flow_id": "flow_id_test_123",
+            })
+            flow.name = name
+            flow.db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        return name
+
+    def _sent_buttons(self, mock_post):
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        for c in data["components"]:
+            if c["type"] == "BUTTONS":
+                return c["buttons"]
+        return []
+
+    # --- case 1: template name ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_template_name_with_hyphen_blocks(self, mock_post):
+        """A label with a hyphen can't make a valid Meta name -> blocked."""
+        doc = self._new_template_doc(
+            template_name="test_tmpl_bad-name", template="Order update", sample_values="",
+        )
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_template_name_trailing_space_stripped(self, mock_post):
+        """A trailing space yields a clean actual_name (not `..._`)."""
+        mock_post.return_value = {"id": "nm1", "status": "PENDING"}
+        doc = self._new_template_doc(
+            template_name="test_tmpl_trail ", template="Order update", sample_values="",
+        )
+        doc.insert(ignore_permissions=True)
+        self.assertEqual(doc.actual_name, "test_tmpl_trail")
+
+    # --- cases 2-4: buttons ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_call_phone_without_number_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_cp", template="Order update")
+        doc.append("buttons", {"button_type": "Call Phone", "button_label": "Call"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_visit_website_without_url_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_vw", template="Order update")
+        doc.append("buttons", {"button_type": "Visit Website", "button_label": "Open", "url_type": "Static"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_dynamic_url_without_variable_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_dynv", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Visit Website", "button_label": "Open",
+            "url_type": "Dynamic", "website_url": "https://x.com/view", "example_url": "https://x.com/view/1",
+        })
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_dynamic_url_without_example_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_dyne", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Visit Website", "button_label": "Open",
+            "url_type": "Dynamic", "website_url": "https://x.com/{{1}}",
+        })
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    # --- case 5: header TEXT with a variable ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_text_header_with_variable_needs_sample_blocks(self, mock_post):
+        doc = self._new_template_doc(
+            template_name="test_tmpl_hdrvar", template="Order update",
+            header_type="TEXT", header="Hi {{1}}",
+        )
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    # --- case 6: Flow/MPM/Catalog rules ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_button_without_flow_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_flow0", template="Order update")
+        doc.append("buttons", {"button_type": "Flow", "button_label": "Open"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_two_mpm_buttons_blocks(self, mock_post):
+        doc = self._new_template_doc(template_name="test_tmpl_2mpm", template="Order update")
+        doc.append("buttons", {"button_type": "Multi-Product Message", "button_label": "A"})
+        doc.append("buttons", {"button_type": "Multi-Product Message", "button_label": "B"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_and_catalog_mix_blocks(self, mock_post):
+        flow = self._ensure_test_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_mix", template="Order update")
+        doc.append("buttons", {"button_type": "Flow", "button_label": "Open", "flow": flow})
+        doc.append("buttons", {"button_type": "Catalog", "button_label": "Shop"})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    # --- Flow / Catalog create payloads (verified shapes) ---
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_button_create_payload(self, mock_post):
+        mock_post.return_value = {"id": "fl1", "status": "PENDING"}
+        flow = self._ensure_test_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_flowok", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Flow", "button_label": "Open form",
+            "flow": flow, "navigate_screen": "WELCOME",
+        })
+        doc.insert(ignore_permissions=True)
+        btn = self._sent_buttons(mock_post)[0]
+        self.assertEqual(btn["type"], "FLOW")
+        self.assertEqual(btn["flow_id"], "flow_id_test_123")
+        self.assertEqual(btn["flow_action"], "navigate")
+        self.assertEqual(btn["navigate_screen"], "WELCOME")
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_catalog_button_create_payload(self, mock_post):
+        mock_post.return_value = {"id": "ct1", "status": "PENDING"}
+        doc = self._new_template_doc(template_name="test_tmpl_catok", template="Order update")
+        doc.append("buttons", {"button_type": "Catalog", "button_label": "View catalog"})
+        doc.insert(ignore_permissions=True)
+        btn = self._sent_buttons(mock_post)[0]
+        self.assertEqual(btn, {"type": "CATALOG", "text": "View catalog"})

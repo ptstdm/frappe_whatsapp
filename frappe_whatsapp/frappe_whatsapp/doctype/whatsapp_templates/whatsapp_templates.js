@@ -12,6 +12,43 @@ frappe.ui.form.on('WhatsApp Templates', {
 			frappe.throw(__("Header Type {0} needs a sample file for Meta review. Attach one in Sample.", [frm.doc.header_type]));
 		}
 
+		// SRO-2026-10-00230: Template Label must make a valid Meta name (new docs).
+		if (frm.is_new()) {
+			const actual = (frm.doc.template_name || "").trim().toLowerCase().replace(/ /g, "_");
+			if (!actual || !/^[a-z0-9_]+$/.test(actual)) {
+				frappe.throw(__("Template Label can use only letters, numbers and spaces. Remove any other characters (e.g. hyphens)."));
+			}
+		}
+
+		// SRO-2026-10-00230: TEXT header with a variable needs a Sample.
+		if (frm.doc.header_type === "TEXT" && /\{\{\s*\d+\s*\}\}/.test(frm.doc.header || "") && !frm.doc.sample) {
+			frappe.throw(__("The Header text contains a variable, so a Sample value is required."));
+		}
+
+		// SRO-2026-10-00230: per-button required fields.
+		(frm.doc.buttons || []).forEach((btn, i) => {
+			const n = i + 1;
+			if (btn.button_type === "Call Phone" && !btn.phone_number) {
+				frappe.throw(__("Button {0} (Call Phone): Phone Number is required.", [n]));
+			}
+			if (btn.button_type === "Visit Website") {
+				if (!btn.website_url) {
+					frappe.throw(__("Button {0} (Visit Website): Website URL is required.", [n]));
+				}
+				if (btn.url_type === "Dynamic") {
+					if (!/\{\{\s*\d+\s*\}\}/.test(btn.website_url || "")) {
+						frappe.throw(__("Button {0} (Visit Website, Dynamic): the URL must contain a variable placeholder.", [n]));
+					}
+					if (!btn.example_url) {
+						frappe.throw(__("Button {0} (Visit Website, Dynamic): an Example URL is required.", [n]));
+					}
+				}
+			}
+			if (btn.button_type === "Flow" && !btn.flow) {
+				frappe.throw(__("Button {0} (Flow): select a WhatsApp Flow.", [n]));
+			}
+		});
+
 		// Open Point 1: BODY sample values must match the {{n}} placeholders.
 		const body = frm.doc.template || "";
 		const nums = (body.match(/\{\{\s*\d+\s*\}\}/g) || []).map(m => parseInt(m.replace(/\D/g, ""), 10));

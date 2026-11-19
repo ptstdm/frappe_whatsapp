@@ -340,6 +340,23 @@ class WhatsAppMessage(Document):
                 "parameters": button_parameters
             })
 
+        # Single-message (non-bulk) MPM: build the product action from this
+        # message's own product fields when the caller didn't pre-set
+        # product_catalog_json (Bulk WhatsApp Message sets it; a standalone send
+        # does not). Shared builder with Bulk so the action JSON can't diverge.
+        if (
+            not self.product_catalog_json
+            and self.get("product_ids")
+            and self.get("thumbnail_product_retailer_id")
+            and any(b.button_type == "Multi-Product Message" for b in (template.buttons or []))
+        ):
+            from frappe_whatsapp.utils import build_mpm_action
+            action = build_mpm_action(
+                self.thumbnail_product_retailer_id, self.product_ids, self.get("mpm_header")
+            )
+            if action:
+                self.product_catalog_json = json.dumps(action)
+
         # We check this before standard buttons because MPM is an interactive action
         has_mpm = False
         if self.product_catalog_json:
@@ -393,6 +410,32 @@ class WhatsAppMessage(Document):
                         "sub_type": "url",
                         "index": current_idx,
                         "parameters": [{"type": "text", "text": url}]
+                    })
+                elif btn.button_type == "Catalog" and self.get("thumbnail_product_retailer_id"):
+                    # Catalog: show the full catalog with this product as thumbnail.
+                    button_parameters.append({
+                        "type": "button",
+                        "sub_type": "catalog",
+                        "index": current_idx,
+                        "parameters": [{
+                            "type": "action",
+                            "action": {"thumbnail_product_retailer_id": self.thumbnail_product_retailer_id},
+                        }],
+                    })
+                elif btn.button_type == "Flow":
+                    # Flow: supply a per-recipient flow_token (+ the screen to open).
+                    flow_doc = frappe.get_doc("WhatsApp Flow", btn.flow)
+                    action = {"flow_token": self.flow_token or frappe.generate_hash(length=16)}
+                    screen = btn.navigate_screen or (
+                        flow_doc.screens[0].screen_id if flow_doc.screens else None
+                    )
+                    if screen:
+                        action["flow_action_data"] = {"screen": screen}
+                    button_parameters.append({
+                        "type": "button",
+                        "sub_type": "flow",
+                        "index": current_idx,
+                        "parameters": [{"type": "action", "action": action}],
                     })
 
             if button_parameters:

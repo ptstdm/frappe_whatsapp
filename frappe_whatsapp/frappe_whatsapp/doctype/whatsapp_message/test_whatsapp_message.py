@@ -411,6 +411,93 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertNotIn("url", sub_types)  # static URL button also excluded
         self.assertIn("quick_reply", sub_types)
 
+    # ------------------------------------------------------------------
+    # SRO-2026-10-00230 — send-side support for Catalog / MPM / Flow buttons
+    # ------------------------------------------------------------------
+    def _make_template_with_buttons(self, name, buttons, template="Hello"):
+        """db_insert a template + its button child rows (no Meta, no validate)."""
+        full = f"{name}-en"
+        if not frappe.db.exists("WhatsApp Templates", full):
+            tmpl = frappe.get_doc({
+                "doctype": "WhatsApp Templates", "template_name": name, "actual_name": name,
+                "template": template, "category": "MARKETING",
+                "language": frappe.db.get_value("Language", {"language_code": "en"}) or "en",
+                "language_code": "en", "whatsapp_account": "Test WA Msg Account",
+                "status": "APPROVED", "id": f"id_{name}", "name": full,
+            })
+            tmpl.flags.ignore_validate = True
+            tmpl.db_insert()
+            for idx, b in enumerate(buttons, start=1):
+                frappe.get_doc({
+                    "doctype": "WhatsApp Button", "parent": full,
+                    "parenttype": "WhatsApp Templates", "parentfield": "buttons",
+                    "idx": idx, **b,
+                }).db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        return full
+
+    def _send_capture(self, **msg_fields):
+        """Call send_template on an in-memory message (no insert → no profile hook)
+        and return the payload handed to Meta."""
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message import (
+            WhatsAppMessage,
+        )
+        msg = frappe.new_doc("WhatsApp Message")
+        msg.update({
+            "type": "Outgoing", "to": "919900000001", "message_type": "Template",
+            "content_type": "text", "whatsapp_account": "Test WA Msg Account", **msg_fields,
+        })
+        with patch.object(WhatsAppMessage, "notify") as m_notify:
+            msg.send_template()
+        data = m_notify.call_args[0][0]
+        return [c for c in data["template"]["components"] if c.get("type") == "button"]
+
+    def test_send_catalog_button(self):
+        name = self._make_template_with_buttons(
+            "test_msg_catalog", [{"button_type": "Catalog", "button_label": "Shop"}]
+        )
+        comps = self._send_capture(template=name, thumbnail_product_retailer_id="SKU1")
+        self.assertEqual(len(comps), 1)
+        self.assertEqual(comps[0]["sub_type"], "catalog")
+        self.assertEqual(comps[0]["index"], "0")
+        self.assertEqual(
+            comps[0]["parameters"][0]["action"], {"thumbnail_product_retailer_id": "SKU1"}
+        )
+
+    def test_send_mpm_single_message(self):
+        name = self._make_template_with_buttons(
+            "test_msg_mpm", [{"button_type": "Multi-Product Message", "button_label": "View"}]
+        )
+        comps = self._send_capture(
+            template=name, thumbnail_product_retailer_id="T1", product_ids="A,B", mpm_header="Picks"
+        )
+        self.assertEqual(comps[0]["sub_type"], "mpm")
+        action = comps[0]["parameters"][0]["action"]
+        self.assertEqual(action["thumbnail_product_retailer_id"], "T1")
+        self.assertEqual(
+            [p["product_retailer_id"] for p in action["sections"][0]["product_items"]], ["A", "B"]
+        )
+
+    def test_send_flow_button(self):
+        if not frappe.db.exists("WhatsApp Flow", "test_msg_flow_fixture"):
+            f = frappe.get_doc({
+                "doctype": "WhatsApp Flow", "flow_name": "test_msg_flow_fixture",
+                "whatsapp_account": "Test WA Msg Account", "category": "OTHER",
+                "status": "Published", "flow_id": "flow_msg_123",
+            })
+            f.name = "test_msg_flow_fixture"
+            f.db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        name = self._make_template_with_buttons(
+            "test_msg_flow",
+            [{"button_type": "Flow", "button_label": "Open", "flow": "test_msg_flow_fixture", "navigate_screen": "WELCOME"}],
+        )
+        comps = self._send_capture(template=name)
+        self.assertEqual(comps[0]["sub_type"], "flow")
+        action = comps[0]["parameters"][0]["action"]
+        self.assertIn("flow_token", action)
+        self.assertEqual(action["flow_action_data"], {"screen": "WELCOME"})
+
 
 class TestApplyWhatsappMessageStatus(FrappeTestCase):
     """apply_whatsapp_message_status retries through transient 1020/1213 and is non-fatal.
