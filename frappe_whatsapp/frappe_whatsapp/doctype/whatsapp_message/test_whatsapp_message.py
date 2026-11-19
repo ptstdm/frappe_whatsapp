@@ -498,6 +498,29 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertIn("flow_token", action)
         self.assertEqual(action["flow_action_data"], {"screen": "WELCOME"})
 
+    def test_send_flow_button_data_exchange_omits_screen(self):
+        """Finding A: a data_exchange Flow button must NOT send flow_action_data
+        (Meta only allows the initial-screen data for the navigate action)."""
+        if not frappe.db.exists("WhatsApp Flow", "test_msg_flow_fixture"):
+            f = frappe.get_doc({
+                "doctype": "WhatsApp Flow", "flow_name": "test_msg_flow_fixture",
+                "whatsapp_account": "Test WA Msg Account", "category": "OTHER",
+                "status": "Published", "flow_id": "flow_msg_123",
+            })
+            f.name = "test_msg_flow_fixture"
+            f.db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        name = self._make_template_with_buttons(
+            "test_msg_flow_dx",
+            [{"button_type": "Flow", "button_label": "Open", "flow": "test_msg_flow_fixture",
+              "flow_action": "data_exchange", "navigate_screen": "WELCOME"}],
+        )
+        comps = self._send_capture(template=name)
+        self.assertEqual(comps[0]["sub_type"], "flow")
+        action = comps[0]["parameters"][0]["action"]
+        self.assertIn("flow_token", action)
+        self.assertNotIn("flow_action_data", action)
+
 
 class TestApplyWhatsappMessageStatus(FrappeTestCase):
     """apply_whatsapp_message_status retries through transient 1020/1213 and is non-fatal.

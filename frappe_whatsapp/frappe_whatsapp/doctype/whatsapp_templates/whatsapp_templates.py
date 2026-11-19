@@ -144,6 +144,10 @@ class WhatsAppTemplates(Document):
             self.is_new()
             or self.has_value_changed("header")
             or self.has_value_changed("header_type")
+            # sample is a Meta-stored field: clearing it still triggers
+            # update_template(), which would send the header without its required
+            # example, so reject its removal here too (legacy unchanged headers pass).
+            or self.has_value_changed("sample")
         ):
             return
         if (

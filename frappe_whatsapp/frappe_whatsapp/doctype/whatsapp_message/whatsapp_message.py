@@ -426,11 +426,15 @@ class WhatsAppMessage(Document):
                     # Flow: supply a per-recipient flow_token (+ the screen to open).
                     flow_doc = frappe.get_doc("WhatsApp Flow", btn.flow)
                     action = {"flow_token": self.flow_token or frappe.generate_hash(length=16)}
-                    screen = btn.navigate_screen or (
-                        flow_doc.screens[0].screen_id if flow_doc.screens else None
-                    )
-                    if screen:
-                        action["flow_action_data"] = {"screen": screen}
+                    # Meta only permits the initial-screen data for the navigate action;
+                    # data_exchange Flows initialise through their endpoint, so sending
+                    # flow_action_data would make the message unsendable.
+                    if (btn.flow_action or "navigate") == "navigate":
+                        screen = btn.navigate_screen or (
+                            flow_doc.screens[0].screen_id if flow_doc.screens else None
+                        )
+                        if screen:
+                            action["flow_action_data"] = {"screen": screen}
                     button_parameters.append({
                         "type": "button",
                         "sub_type": "flow",

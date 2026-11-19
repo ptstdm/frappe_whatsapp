@@ -1054,3 +1054,19 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         doc.footer = "New footer"
         doc.save(ignore_permissions=True)  # header unchanged -> validate_header must not block
         self.assertEqual(doc.footer, "New footer")
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_clearing_sample_on_variable_text_header_blocks(self, mock_post):
+        """Finding B: removing the Sample from an existing variable TEXT header is
+        rejected before the Meta call. sample is a Meta-stored field, so clearing it
+        still triggers update_template() and would send an example-less header."""
+        doc = self._make_template_without_hooks(
+            template_name="test_tmpl_clrhdr", template="Your order is ready",
+            category="MARKETING", header_type="TEXT", header="Hi {{1}}",
+        )
+        frappe.db.set_value("WhatsApp Templates", doc.name, "sample", "Ravi")
+        doc.reload()
+        doc.sample = ""
+        with self.assertRaises(frappe.ValidationError):
+            doc.save(ignore_permissions=True)
+        mock_post.assert_not_called()
