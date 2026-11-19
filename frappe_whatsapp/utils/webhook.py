@@ -12,10 +12,7 @@ from frappe.utils.background_jobs import get_queues_timeout
 
 from frappe_whatsapp.utils import get_whatsapp_account
 
-# A WhatsApp status UPDATE can hit a transient 1020/1213 under innodb_snapshot_isolation when concurrent
-# Meta callbacks (sent/delivered/read) + the chat "mark as read" race the same row. Retry through it — the
-# write is last-writer-wins + idempotent (re-delivered callbacks re-apply), and each retry's rollback gives
-# a fresh snapshot so it converges.
+
 _STATUS_RETRY_ATTEMPTS = 5
 _STATUS_RETRY_BASE_S = 0.05
 
@@ -73,12 +70,6 @@ def post():
 
 	whatsapp_account = get_whatsapp_account(phone_id) if phone_id else None
 
-	# Only `messages` events carry `metadata.phone_number_id`. Status-change
-	# events (`message_template_status_update`, message status callbacks) have
-	# no metadata, so `phone_id` is None and `whatsapp_account` is also None
-	# for them by design. Gating the entire handler on `whatsapp_account`
-	# silently drops every template-status update; gate only the message-
-	# ingestion branch instead.
 	if messages and not whatsapp_account:
 		return
 
@@ -177,8 +168,8 @@ def post():
 						"whatsapp_account": whatsapp_account.name
 					}).insert(ignore_permissions=True)
 
-					# Publish realtime event for flow response
-					frappe.publish_realtime(  # nosemgrep: frappe-realtime-pick-room -- intentional site-wide fan-out for chat UIs (whatsapp_chat companion app) listening for inbound flow responses
+			
+					frappe.publish_realtime( 
 						"whatsapp_flow_response",
 						{
 							"phone": message['from'],
@@ -281,10 +272,6 @@ def post():
 					"profile_name": sender_profile_name
 				}).insert(ignore_permissions=True)
 			elif message_type == "contacts":
-				# Meta delivers shared contact cards as a LIST under message["contacts"]
-				# (note the plural type vs the singular "contact" content_type option).
-				# The old generic else did message["contacts"].get(...) and crashed with
-				# "'list' object has no attribute 'get'".
 				contacts = message.get("contacts") or []
 				summary = "; ".join(
 					(c.get("name", {}) or {}).get("formatted_name", "")
@@ -319,11 +306,6 @@ def post():
 					"whatsapp_account": whatsapp_account.name
 				}).insert(ignore_permissions=True)
 			else:
-				# Fallback for any inbound type we don't explicitly handle (sticker,
-				# system, unknown, ...). message[message_type] may be a dict, a list,
-				# or absent, so never assume .get(); and the raw Meta type is usually
-				# not a valid content_type option, so record it as "unsupported" and
-				# keep the webhook 200 (a crash makes Meta retry and drops messages).
 				payload = message.get(message_type)
 				if isinstance(payload, dict):
 					body = payload.get("caption") or payload.get("body") or json.dumps(payload)

@@ -2,17 +2,15 @@
 // For license information, please see license.txt
 
 frappe.ui.form.on('WhatsApp Templates', {
-	// Mirror the server-side checks so the user gets immediate feedback before the
-	// save round-trip. The server (validate) stays authoritative.
 	validate: function (frm) {
 		const example = "Ravi,10 AM,04 Oct 2026 07:24 PM";
 
-		// SRO-2026-10-00227: a media header needs a sample file.
+		// a media header needs a sample file.
 		if (["IMAGE", "DOCUMENT"].includes(frm.doc.header_type) && !frm.doc.sample) {
 			frappe.throw(__("Header Type {0} needs a sample file for Meta review. Attach one in Sample.", [frm.doc.header_type]));
 		}
 
-		// SRO-2026-10-00230: Template Label must make a valid Meta name (new docs).
+		// Template Label must make a valid Meta name (new docs).
 		if (frm.is_new()) {
 			const actual = (frm.doc.template_name || "").trim().toLowerCase().replace(/ /g, "_");
 			if (!actual || !/^[a-z0-9_]+$/.test(actual)) {
@@ -20,14 +18,11 @@ frappe.ui.form.on('WhatsApp Templates', {
 			}
 		}
 
-		// SRO-2026-10-00230: TEXT header with a variable needs a Sample. Only enforce
-		// on new docs so an existing imported template (header unchanged) isn't blocked;
-		// the server re-checks on any actual header change.
+		// TEXT header with a variable needs a Sample. Only enforce
 		if (frm.is_new() && frm.doc.header_type === "TEXT" && /\{\{\s*\d+\s*\}\}/.test(frm.doc.header || "") && !frm.doc.sample) {
 			frappe.throw(__("The Header text contains a variable, so a Sample value is required."));
 		}
 
-		// SRO-2026-10-00230: per-button required fields.
 		(frm.doc.buttons || []).forEach((btn, i) => {
 			const n = i + 1;
 			if (btn.button_type === "Call Phone" && !btn.phone_number) {
@@ -51,7 +46,7 @@ frappe.ui.form.on('WhatsApp Templates', {
 			}
 		});
 
-		// Open Point 1: BODY sample values must match the {{n}} placeholders.
+		
 		const body = frm.doc.template || "";
 		const nums = (body.match(/\{\{\s*\d+\s*\}\}/g) || []).map(m => parseInt(m.replace(/\D/g, ""), 10));
 		const distinct = Array.from(new Set(nums)).sort((a, b) => a - b);
@@ -59,7 +54,6 @@ frappe.ui.form.on('WhatsApp Templates', {
 
 		for (let i = 0; i < n; i++) {
 			if (distinct[i] !== i + 1) {
-				// No replace-args: keep the literal {{1}} in the message.
 				frappe.throw(__("Template variables must be numbered sequentially starting at {{1}} with no gaps."));
 			}
 		}
@@ -69,7 +63,6 @@ frappe.ui.form.on('WhatsApp Templates', {
 			if (raw.trim()) {
 				frappe.throw(__("The template body has no variables, so Sample Values must be empty."));
 			}
-			// Normalise whitespace-only input to empty, matching the server.
 			frm.doc.sample_values = "";
 			return;
 		}

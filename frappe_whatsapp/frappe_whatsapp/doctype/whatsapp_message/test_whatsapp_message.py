@@ -325,7 +325,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
                 "status": "APPROVED",
                 "id": "test_template_id_123",
             }).db_insert()
-            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+            frappe.db.commit()  
 
         from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message import send_template
         send_template(
@@ -391,7 +391,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
                     **data,
                 })
                 row.db_insert()
-            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+            frappe.db.commit()  
 
         doc = frappe.get_doc({
             "doctype": "WhatsApp Message",
@@ -411,9 +411,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertNotIn("url", sub_types)  # static URL button also excluded
         self.assertIn("quick_reply", sub_types)
 
-    # ------------------------------------------------------------------
-    # SRO-2026-10-00230 — send-side support for Catalog / MPM / Flow buttons
-    # ------------------------------------------------------------------
+    
     def _make_template_with_buttons(self, name, buttons, template="Hello"):
         """db_insert a template + its button child rows (no Meta, no validate)."""
         full = f"{name}-en"

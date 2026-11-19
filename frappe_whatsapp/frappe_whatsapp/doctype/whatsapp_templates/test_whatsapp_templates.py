@@ -34,7 +34,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
                 "is_default_outgoing": 1,
             })
             account.insert(ignore_permissions=True)
-            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+            frappe.db.commit()  
 
     @classmethod
     def _ensure_second_test_account(cls):
@@ -52,7 +52,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
                 "webhook_verify_token": "tmpl_test_verify_token_2",
             })
             account.insert(ignore_permissions=True)
-            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+            frappe.db.commit()  
 
     def setUp(self):
         # Set password within each test's transaction scope
@@ -99,7 +99,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             "sample_values": kwargs.get("sample_values", ""),
         })
         doc.db_insert()
-        frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+        frappe.db.commit()  
         return frappe.get_doc("WhatsApp Templates", doc.name)
 
     def test_template_autoname(self):
@@ -555,9 +555,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         self.assertTrue(mock_post.called)
         self.assertEqual(doc.sample_values, "a,b,c")
 
-    # ------------------------------------------------------------------
-    # SRO-2026-10-00227 — media header (DOCUMENT/IMAGE) crash
-    # ------------------------------------------------------------------
+ 
     @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
     def test_media_header_without_sample_blocks(self, mock_post):
         """DOCUMENT header without a sample -> clear message, no crash, nothing sent."""
@@ -630,9 +628,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             m_media.assert_called_once()
         self.assertEqual(doc.header_media_handle, "H_NEW")
 
-    # ------------------------------------------------------------------
-    # SRO-2026-10-00228 — call Meta only on real changes + surface the error
-    # ------------------------------------------------------------------
+
     @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
     def test_no_meta_call_on_internal_field_change(self, mock_post):
         """Editing only an internal field (for_doctype) sends nothing to Meta."""
@@ -698,9 +694,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             doc.save(ignore_permissions=True)
         self.assertIn("Could not reach Meta", str(cm.exception))
 
-    # ------------------------------------------------------------------
-    # Copilot review follow-ups (buttons comparison, upload gating, blank sample)
-    # ------------------------------------------------------------------
+  
     @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
     def test_no_meta_call_on_internal_change_with_buttons(self, mock_post):
         """A template WITH buttons: an internal-only edit still sends nothing to Meta.
@@ -789,9 +783,7 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         doc.validate_sample_values()
         self.assertEqual(doc.sample_values, "")
 
-    # ------------------------------------------------------------------
-    # SRO-2026-10-00230 — validate name / header / buttons + Flow/MPM/Catalog
-    # ------------------------------------------------------------------
+
     def _ensure_test_flow(self):
         """A published WhatsApp Flow fixture with a flow_id (for Flow buttons)."""
         name = "test_tmpl_flow_fixture"

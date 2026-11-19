@@ -67,7 +67,7 @@ class WhatsAppTemplates(Document):
         Meta builds the BODY example from a comma-separated ``sample_values`` list
         that must match the ``{{n}}`` placeholders in the body. Values on separate
         lines, a comma inside a value, or a count mismatch were previously sent as-is
-        and rejected by Meta with an opaque error (SRO-2026-08-00159).
+        and rejected by Meta with an opaque error 
         """
         body = self.template or ""
         distinct = sorted({int(x) for x in re.findall(r"\{\{\s*(\d+)\s*\}\}", body)})
@@ -121,7 +121,7 @@ class WhatsAppTemplates(Document):
 
         Meta reviews that sample and it yields the media handle used to build the
         header component. Without it ``get_header()`` raised
-        ``AttributeError: ... '_media_id'`` (SRO-2026-10-00227); show a clear,
+        ``AttributeError: ... '_media_id'``; show a clear,
         fixable message instead.
         """
         if self.header_type in ["IMAGE", "DOCUMENT"] and not self.sample:
@@ -132,8 +132,7 @@ class WhatsAppTemplates(Document):
             )
 
     def validate_header(self):
-        """A TEXT header containing a variable needs a Sample value for Meta
-        (SRO-2026-10-00230 case 5).
+        """A TEXT header containing a variable needs a Sample value for Meta.
 
         Only enforce on create or when the header actually changes. An older
         template imported before fetch() persisted the header example may have a
@@ -167,7 +166,6 @@ class WhatsAppTemplates(Document):
         digits and underscore. Derive ``actual_name`` once, here, from the label
         so a value with spaces/caps/hyphens/trailing-space can't silently produce
         a broken name like ``order_ready_-_alert`` or ``testing_``
-        (SRO-2026-10-00230 case 1).
         """
         if not self.is_new():
             return
@@ -182,7 +180,7 @@ class WhatsAppTemplates(Document):
         self.actual_name = actual
 
     def validate_buttons(self):
-        """Validate each button before it reaches Meta (SRO-2026-10-00230).
+        """Validate each button before it reaches Meta 
 
         Catches the Call Phone / Visit Website / Dynamic URL gaps, requires a
         created Flow for a Flow button, and enforces Meta's special-button rules
@@ -305,7 +303,6 @@ class WhatsAppTemplates(Document):
         Scalar fields use ``has_value_changed``; the ``buttons`` child table is
         compared by value so a no-op or internal-only save of a template that has
         buttons does not trigger a needless Meta edit + re-review
-        (SRO-2026-10-00228).
         """
         if any(self.has_value_changed(f) for f in META_STORED_FIELDS if f != "buttons"):
             return True
@@ -320,7 +317,6 @@ class WhatsAppTemplates(Document):
         can read Meta's ``error_user_*``); a connection/timeout raises before the
         flag is set, so report that as an unreachable-Meta message rather than
         crashing with ``'NoneType' object has no attribute 'json'``
-        (SRO-2026-10-00228).
         """
         if isinstance(exc, HTTPError) and frappe.flags.integration_request is not None:
             try:
@@ -434,11 +430,7 @@ class WhatsAppTemplates(Document):
         return frappe.get_doc("File", {"file_url": file_url}).get_content()
 
 
-    def after_insert(self):  # nosemgrep: frappe-modifying-but-not-committing -- self.actual_name/id/status are persisted via self.db_update() after the Meta round-trip; the static check can't trace through the API call
-        # actual_name / id / status are persisted via self.db_update() below
-        # after the Meta round-trip; the static check can't trace that call.
-        # actual_name was computed + validated in validate_template_name(); keep a
-        # defensive fallback (with strip) for any path that bypassed validate.
+    def after_insert(self):  
         if not self.actual_name and self.template_name:
             self.actual_name = self.template_name.strip().lower().replace(" ", "_")  # nosemgrep: frappe-modifying-but-not-committing
 
@@ -662,11 +654,6 @@ def fetch():
                             elif button["type"] == "PHONE_NUMBER":
                                 btn["phone_number"] = button.get("phone_number")
                             elif button["type"] == "FLOW":
-                                # Meta returns flow_id (+ flow_action / navigate_screen),
-                                # not our local "flow" link. button.get("flow") is always
-                                # None, so this used to clear the Flow link and break the
-                                # send lookup + re-save. Resolve the id back to the local
-                                # WhatsApp Flow and keep the navigation settings.
                                 flow_id = button.get("flow_id")
                                 if flow_id:
                                     local_flow = frappe.db.get_value(
