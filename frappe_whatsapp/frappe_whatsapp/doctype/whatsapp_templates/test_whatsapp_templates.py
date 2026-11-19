@@ -940,3 +940,117 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         doc.insert(ignore_permissions=True)
         btn = self._sent_buttons(mock_post)[0]
         self.assertEqual(btn, {"type": "CATALOG", "text": "View catalog"})
+
+    # --- Copilot review follow-ups (findings 1-4) ---
+    def _ensure_draft_flow(self):
+        """A WhatsApp Flow fixture that has a flow_id but is still Draft."""
+        name = "test_tmpl_draft_flow_fixture"
+        if not frappe.db.exists("WhatsApp Flow", name):
+            flow = frappe.get_doc({
+                "doctype": "WhatsApp Flow",
+                "flow_name": name,
+                "whatsapp_account": "Test WA Tmpl Account",
+                "category": "OTHER",
+                "status": "Draft",
+                "flow_id": "draft_flow_id_1",
+            })
+            flow.name = name
+            flow.db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- fixture visible to later queries
+        return name
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_draft_flow_with_id_blocks(self, mock_post):
+        """Finding 3: a Flow with a flow_id but status != Published is rejected
+        (create_on_whatsapp assigns an id before publication); Meta not called."""
+        flow = self._ensure_draft_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_draftflow", template="Order update")
+        doc.append("buttons", {"button_type": "Flow", "button_label": "Open", "flow": flow})
+        with self.assertRaises(frappe.ValidationError):
+            doc.insert(ignore_permissions=True)
+        mock_post.assert_not_called()
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_flow_data_exchange_omits_navigate_screen(self, mock_post):
+        """Finding 4: flow_action=data_exchange must NOT emit navigate_screen
+        (Meta only allows it with the navigate action)."""
+        mock_post.return_value = {"id": "fldx", "status": "PENDING"}
+        flow = self._ensure_test_flow()
+        doc = self._new_template_doc(template_name="test_tmpl_flowdx", template="Order update")
+        doc.append("buttons", {
+            "button_type": "Flow", "button_label": "Open form",
+            "flow": flow, "flow_action": "data_exchange", "navigate_screen": "WELCOME",
+        })
+        doc.insert(ignore_permissions=True)
+        btn = self._sent_buttons(mock_post)[0]
+        self.assertEqual(btn["flow_action"], "data_exchange")
+        self.assertNotIn("navigate_screen", btn)
+
+    @patch("frappe.model.document.Document.get_password", return_value="mock_token")
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request")
+    def test_fetch_resolves_flow_link_and_keeps_navigation(self, mock_request, mock_get_password):
+        """Finding 1: fetch() must map Meta's flow_id back to the local WhatsApp Flow
+        and keep flow_action / navigate_screen, not clear the Flow link."""
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import fetch
+        flow = self._ensure_test_flow()  # Published, flow_id flow_id_test_123
+        tmpl = {
+            "name": "test_tmpl_fetchflow", "status": "APPROVED", "language": "en",
+            "category": "UTILITY", "id": "fetched_flow_tmpl_id",
+            "components": [
+                {"type": "BODY", "text": "Hi {{1}}"},
+                {"type": "BUTTONS", "buttons": [{
+                    "type": "FLOW", "text": "Open form", "flow_id": "flow_id_test_123",
+                    "flow_action": "NAVIGATE", "navigate_screen": "WELCOME",
+                }]},
+            ],
+        }
+        self._serve_meta_pages(mock_request, {
+            self._templates_url("Test WA Tmpl Account"): {"data": [tmpl]},
+        })
+        fetch()
+        name = frappe.db.get_value("WhatsApp Templates", {"actual_name": "test_tmpl_fetchflow"}, "name")
+        self.assertTrue(name)
+        rows = frappe.get_all(
+            "WhatsApp Button", filters={"parent": name},
+            fields=["button_type", "flow", "flow_action", "navigate_screen"],
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].button_type, "Flow")
+        self.assertEqual(rows[0].flow, flow)
+        self.assertEqual(rows[0].flow_action, "navigate")  # Meta's NAVIGATE lowercased
+        self.assertEqual(rows[0].navigate_screen, "WELCOME")
+
+    @patch("frappe.model.document.Document.get_password", return_value="mock_token")
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_request")
+    def test_fetch_imports_text_header_example(self, mock_request, mock_get_password):
+        """Finding 2: a fetched TEXT header with a {{n}} must import its example into
+        `sample`, else the template fails validate_header on every later save."""
+        from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import fetch
+        tmpl = {
+            "name": "test_tmpl_fetchhdr", "status": "APPROVED", "language": "en",
+            "category": "UTILITY", "id": "fetched_hdr_tmpl_id",
+            "components": [
+                {"type": "HEADER", "format": "TEXT", "text": "Hi {{1}}",
+                 "example": {"header_text": ["Ravi"]}},
+                {"type": "BODY", "text": "Your order is ready"},
+            ],
+        }
+        self._serve_meta_pages(mock_request, {
+            self._templates_url("Test WA Tmpl Account"): {"data": [tmpl]},
+        })
+        fetch()
+        name = frappe.db.get_value("WhatsApp Templates", {"actual_name": "test_tmpl_fetchhdr"}, "name")
+        self.assertEqual(frappe.db.get_value("WhatsApp Templates", name, "sample"), "Ravi")
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_unchanged_text_header_without_sample_not_blocked(self, mock_post):
+        """Finding 2: an older imported template whose TEXT header has a {{n}} but no
+        sample must stay editable (footer-only change) without being blocked."""
+        mock_post.return_value = {"id": "oldhdr", "status": "PENDING"}
+        doc = self._make_template_without_hooks(
+            template_name="test_tmpl_oldhdr", template="Your order is ready",
+            category="MARKETING", header_type="TEXT", header="Hi {{1}}",
+        )
+        doc.footer = "New footer"
+        doc.save(ignore_permissions=True)  # header unchanged -> validate_header must not block
+        self.assertEqual(doc.footer, "New footer")

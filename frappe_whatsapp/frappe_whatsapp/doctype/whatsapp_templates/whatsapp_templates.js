@@ -20,8 +20,10 @@ frappe.ui.form.on('WhatsApp Templates', {
 			}
 		}
 
-		// SRO-2026-10-00230: TEXT header with a variable needs a Sample.
-		if (frm.doc.header_type === "TEXT" && /\{\{\s*\d+\s*\}\}/.test(frm.doc.header || "") && !frm.doc.sample) {
+		// SRO-2026-10-00230: TEXT header with a variable needs a Sample. Only enforce
+		// on new docs so an existing imported template (header unchanged) isn't blocked;
+		// the server re-checks on any actual header change.
+		if (frm.is_new() && frm.doc.header_type === "TEXT" && /\{\{\s*\d+\s*\}\}/.test(frm.doc.header || "") && !frm.doc.sample) {
 			frappe.throw(__("The Header text contains a variable, so a Sample value is required."));
 		}
 
