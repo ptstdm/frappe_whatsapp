@@ -280,16 +280,68 @@ def post():
 					"content_type": message_type,
 					"profile_name": sender_profile_name
 				}).insert(ignore_permissions=True)
-			else:
+			elif message_type == "contacts":
+				# Meta delivers shared contact cards as a LIST under message["contacts"]
+				# (note the plural type vs the singular "contact" content_type option).
+				# The old generic else did message["contacts"].get(...) and crashed with
+				# "'list' object has no attribute 'get'".
+				contacts = message.get("contacts") or []
+				summary = "; ".join(
+					(c.get("name", {}) or {}).get("formatted_name", "")
+					for c in contacts if isinstance(c, dict)
+				).strip("; ") or _("Shared contact")
 				frappe.get_doc({
 					"doctype": "WhatsApp Message",
 					"type": "Incoming",
 					"from": message['from'],
 					"message_id": message['id'],
-					"message": message[message_type].get(message_type),
-					"content_type" : message_type,
-					"profile_name":sender_profile_name,
-					"whatsapp_account":whatsapp_account.name
+					"reply_to_message_id": reply_to_message_id,
+					"is_reply": is_reply,
+					"message": summary,
+					"content_type": "contact",
+					"profile_name": sender_profile_name,
+					"whatsapp_account": whatsapp_account.name
+				}).insert(ignore_permissions=True)
+			elif message_type == "location":
+				loc = message.get("location") or {}
+				body = loc.get("name") or loc.get("address") or \
+					f"{loc.get('latitude', '')},{loc.get('longitude', '')}"
+				frappe.get_doc({
+					"doctype": "WhatsApp Message",
+					"type": "Incoming",
+					"from": message['from'],
+					"message_id": message['id'],
+					"reply_to_message_id": reply_to_message_id,
+					"is_reply": is_reply,
+					"message": body,
+					"content_type": "location",
+					"profile_name": sender_profile_name,
+					"whatsapp_account": whatsapp_account.name
+				}).insert(ignore_permissions=True)
+			else:
+				# Fallback for any inbound type we don't explicitly handle (sticker,
+				# system, unknown, ...). message[message_type] may be a dict, a list,
+				# or absent, so never assume .get(); and the raw Meta type is usually
+				# not a valid content_type option, so record it as "unsupported" and
+				# keep the webhook 200 (a crash makes Meta retry and drops messages).
+				payload = message.get(message_type)
+				if isinstance(payload, dict):
+					body = payload.get("caption") or payload.get("body") or json.dumps(payload)
+				elif payload is None:
+					body = ""
+				else:
+					body = json.dumps(payload)
+				frappe.get_doc({
+					"doctype": "WhatsApp Message",
+					"type": "Incoming",
+					"from": message['from'],
+					"message_id": message['id'],
+					"reply_to_message_id": reply_to_message_id,
+					"is_reply": is_reply,
+					"message": body,
+					"content_type": "unsupported",
+					"profile_name": sender_profile_name,
+					"whatsapp_account": whatsapp_account.name
 				}).insert(ignore_permissions=True)
 
 	else:
