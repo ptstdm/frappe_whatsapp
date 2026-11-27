@@ -56,14 +56,6 @@ class WhatsAppTemplates(Document):
             self.language_code = lang_code.replace("-", "_")
         self.set_language_code()
 
-        # Keep Meta's newer time if the status webhook stored it while this form was open.
-        before = self.get_doc_before_save()
-        if before and before.meta_last_updated_on and (
-            not self.meta_last_updated_on
-            or get_datetime(self.meta_last_updated_on) < get_datetime(before.meta_last_updated_on)
-        ):
-            self.meta_last_updated_on = before.meta_last_updated_on
-
         meta_changed = not self.is_new() and self._meta_fields_changed()
 
         # Upload the header sample to Meta only when it is actually needed
