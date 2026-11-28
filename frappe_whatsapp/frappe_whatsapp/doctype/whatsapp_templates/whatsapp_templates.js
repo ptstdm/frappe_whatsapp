@@ -42,5 +42,29 @@ frappe.ui.form.on('WhatsApp Templates', {
 			const got = raw.trim() ? values.length : 0;
 			frappe.throw(__("The template has {0} variable(s) but Sample Values has {1}. Write one value per variable on one line, separated by commas (no comma inside a value). Example: {2}", [n, got, example]));
 		}
+	},
+
+	refresh: function(frm) {
+		// Meta's edit limit note, built on the server in the user's time zone.
+		const edit_status = frm.doc.__onload && frm.doc.__onload.meta_edit_status;
+		if (frm.is_new() || !edit_status) return;
+
+		frm.set_intro(edit_status.message, edit_status.color);
+	},
+
+	before_save: function(frm) {
+		// Warn before an edit Meta's limit may refuse; "Save Anyway" saves once without asking again.
+		if (frm.is_new() || frm.skip_meta_edit_warning) {
+			frm.skip_meta_edit_warning = false;
+			return;
+		}
+		return frm.call("get_meta_edit_warning").then((r) => {
+			if (!r.message) return;
+			frappe.validated = false;
+			frappe.warn(__("Meta Edit Limit"), r.message, () => {
+				frm.skip_meta_edit_warning = true;
+				frm.save();
+			}, __("Save Anyway"));
+		});
 	}
 });
